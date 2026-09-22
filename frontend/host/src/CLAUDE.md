@@ -47,11 +47,13 @@ no server-state library — React context is the whole store.
 
 **The server owns the game; the client reflects it.** The host UI never decides what happens next
 — it emits `host_advance` and waits for the resulting event. Routing follows suit: `new_question`,
-`question_results`, and `game_over` each navigate, and `sync_state` restores the right route after
-a reconnect, so a mid-game refresh recovers.
+`question_results`, and `game_over` each navigate, and `sync_state` restores the route after a
+reconnect — but only the route. A refresh mid-question recovers fully; a refresh during results
+or after game over does not (see [pages/CLAUDE.md](pages/CLAUDE.md)).
 
-**Two transports, two naming conventions.** Socket payloads are camelCase; REST responses are
-snake_case (`room_code`, `game_title`, `access_token`). Both are live.
+**Two transports, two naming conventions.** Socket payloads are camelCase (except
+`sync_state.players`, below); REST responses are snake_case (`room_code`, `game_title`,
+`access_token`). Both are live.
 
 ## Gotchas
 
@@ -61,9 +63,15 @@ snake_case (`room_code`, `game_title`, `access_token`). Both are live.
 guarantee:
 
 - `AnswerStatusPayload` declares `displayName` and `answered`; the server sends neither.
-- `LeaderboardEntry` is unused. The host deliberately receives anonymous scores
-  (`scores: number[]`), so no host screen shows named rankings — that's a privacy decision, not an
-  oversight.
+- **`SyncStatePayload.players` is typed `PlayerInfo[]` (`userId`, `displayName`), but the server
+  sends raw Redis records** — `user_id`, `display_name`, `is_guest`, `score`, `is_connected`. No
+  screen renders `players` today, so nothing visibly breaks; the first lobby roster will show
+  `undefined` names, and `player_joined` / `player_left` (which match on `userId`) will never
+  dedupe or remove players that arrived via `sync_state`.
+- `LeaderboardEntry` is unused, and `game_over` gives the host anonymous scores
+  (`scores: number[]`), so no host screen shows named rankings. That is a UI choice, not a data
+  boundary: `sync_state.players` already delivers every player's name and running score to the
+  host.
 - `AnswerReveal` includes `Record<string, never>` as a member, so an unknown question type
   type-checks as an empty object rather than failing. Convenient, but it hides new types.
 
@@ -98,6 +106,12 @@ Three pieces of logic exist in both this app and the backend and must be changed
   duplicated joins in dev logs are expected, not a bug.
 - `basename={import.meta.env.BASE_URL}` means routes only resolve correctly when the app is served
   from its configured base path. Opening a built bundle at `/` will not route.
+
+### Errors
+
+- Any socket `error` event makes `GameLayout` replace the entire game UI with an error screen,
+  cleared only when the socket reconnects — including recoverable errors such as starting a game
+  that has no questions.
 
 ### Styling
 

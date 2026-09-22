@@ -28,7 +28,8 @@ that shows up here — scoring rules, lifecycle transitions — belongs in a ser
 
 Three guard levels are in use: `require_admin` (all of `admin.py`), `require_user` (host actions
 in `game.py`; excludes guests), and `get_current_user` (any authenticated user, including
-guests). Two endpoints have no guard at all: `GET /api/health` and
+guests). Outside `auth.py` (whose login, OAuth2, guest, refresh, and logout endpoints are
+necessarily open), two endpoints have no guard at all: `GET /api/health` and
 `GET /api/game/rooms/{room_code}/ping`.
 
 ## Gotchas
@@ -44,13 +45,23 @@ guests). Two endpoints have no guard at all: `GET /api/health` and
   moves that guest's scores across *every* session they ever played, then deletes the guest user.
   The admin twin at `POST /api/admin/users/merge-guest` is global by design; this one reads as
   though it is scoped, and isn't.
+- **The two merge-guest endpoints behave differently**, despite the host one's docstring saying it
+  "delegates to the same logic". When no user has the target netid, the admin one **promotes the
+  guest in place** (sets `netid`, `role = "USER"`) — so a typo'd netid silently creates a
+  real-looking account — while the host one returns 404. The admin one also strips whitespace from
+  the netid; the host one only lowercases. Either can leave duplicate score rows if the real user
+  also played the same session (see [models/CLAUDE.md](../models/CLAUDE.md)).
+- **`DELETE /api/admin/games/{gid}/questions/{qid}` 500s for any answered question.** Unlike game
+  and user delete, it doesn't pre-delete score rows, and `session_scores.question_id` is NOT NULL
+  with no cascade, so SQLAlchemy's attempt to null the FK is rejected by MySQL.
 
 ### Validation and typing
 
-- **`merge_guest_for_session` takes `body: dict`**, bypassing Pydantic entirely — no schema, no
-  `extra="forbid"`, no OpenAPI documentation of its shape. It hand-rolls its own presence checks
-  and raises `ConflictError` (409) for what is really a validation failure (422). It's the one
-  un-schema'd request body in the package.
+- **Both merge-guest handlers take `body: dict`** (`merge_guest_for_session` in `game.py` and
+  `merge_guest` in `admin.py`), bypassing Pydantic entirely — no schema, no `extra="forbid"`, no
+  OpenAPI documentation of their shape. They hand-roll presence checks and raise `ConflictError`
+  (409) for what is really a validation failure (422). They're the only un-schema'd request
+  bodies in the package.
 - `PUT /api/admin/games/{gid}/questions/{qid}` does not re-run structural validation — see
   [schemas/CLAUDE.md](../schemas/CLAUDE.md). `POST /api/admin/games/import` *does* (it constructs
   a real `QuestionCreate` per question), so the import path is stricter than the edit path.
@@ -81,7 +92,11 @@ guests). Two endpoints have no guard at all: `GET /api/health` and
   content is a server-built JSON string; don't extend it with user-controlled values.
 - **Rate limits exist on only three endpoints**, all in `auth.py`: login (5/15min), exchange-temp
   (10/min), guest (10/15min). Nothing on admin, game, or health — and the limiter is per-process
-  and in-memory (see [common/CLAUDE.md](../common/CLAUDE.md)).
+  and in-memory, and behind nginx it probably keys every client on the proxy's address, giving
+  the whole class one shared bucket (see [common/CLAUDE.md](../common/CLAUDE.md)).
+- **`POST /api/auth/guest` identifies a guest by email alone.** An existing guest's email returns a
+  token *for that guest* — no verification — and a non-guest email gets a 409 that confirms an
+  account exists. See [services/CLAUDE.md](../services/CLAUDE.md).
 - `GET /api/game/rooms/{room_code}/ping` is public and unthrottled, which makes it a room-code
   probe. The 31-character, 6-position code space is large enough that this isn't a practical
   enumeration risk, but the endpoint confirms existence and status to anyone.
@@ -98,4 +113,5 @@ guests). Two endpoints have no guard at all: `GET /api/health` and
   there's no import cycle forcing it here.
 - N+1 queries in several list endpoints: `my_active_sessions` fetches the game and course per
   session, and `get_room` loads every `Question` row just to `len()` them instead of issuing a
-  `COUNT`.
+  `COUNT`. The worst is `admin.py`'s `list_sessions`: four queries per session (game, course,
+  host, player count) over an unpaginated list of every session ever played.

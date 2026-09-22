@@ -27,8 +27,10 @@ writes through these classes.
 
 ## How it fits in
 
-Bottom of the backend stack. `services/` owns all business logic over these models; `routers/`
-and `websocket/` never construct queries directly against them without going through a service.
+Bottom of the backend stack. `services/` owns the game logic over these models, but routers and
+the gateway also query them directly: most of `routers/admin.py` is inline CRUD, `routers/game.py`
+does its own lookups, and `websocket/gateway.py` runs a few `select`s itself. Don't assume a
+service sits between every caller and a table.
 `schemas/` mirrors parts of this shape as Pydantic request/response types — the two are
 deliberately separate, so a field added here is not automatically exposed over the API.
 
@@ -51,11 +53,21 @@ realize these models live in [migrations/versions/](../migrations/versions/).
 - `game.py`'s `TYPE_CHECKING` block imports `UserGameAccess` from `.user`, but the class is
   defined in `game.py` itself. It's harmless at runtime (never executed) but wrong — a type
   checker will flag it.
-- Deletion behavior is uneven on purpose. `GameSession` cascades to its `SessionScore` rows, and
+- Deletion behavior is uneven. `GameSession` cascades to its `SessionScore` rows, and
   courses/games cascade to their rosters, questions, and access rows — but `GameSession.game_id`
   and `course_id` have no `ondelete`, and `SessionScore.user_id` / `question_id` don't either.
-  Deleting a game or user that has session history will hit an FK error rather than silently
-  removing results.
+  A bare ORM delete of a parent with history makes SQLAlchemy null the NOT NULL FK, which MySQL
+  rejects. The admin endpoints for **games and users** work around that by deleting the dependent
+  session/score rows first — so those deletes *silently erase results*
+  ([routers/CLAUDE.md](../routers/CLAUDE.md)). **Questions** have no such workaround: deleting any
+  question that has ever been answered fails with a 500.
+- **`SessionScore` has no unique constraint on (`session_id`, `user_id`, `question_id`)** — only a
+  non-unique index on (`session_id`, `user_id`). Nothing in the schema stops a player being scored
+  twice for one question; the only guard is a non-atomic Redis check in the gateway. The
+  leaderboard, exports, and report all aggregate `session_scores` and will count duplicates.
+- **`User.email` is UNIQUE, and guests are identified by email.** A guest row holding a student's
+  address blocks creating their real account with the same email — see
+  [services/CLAUDE.md](../services/CLAUDE.md).
 - `GameSession.host_user_id` is nullable; a session can outlive or predate a known host.
 - `room_code` is `String(6)` and globally unique across all time, not just active sessions — code
   generation has to handle collisions with completed sessions.

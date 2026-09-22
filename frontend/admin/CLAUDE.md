@@ -56,7 +56,10 @@ populated console.
   `/admin/` renders blank.
 - **Compiled config artifacts sit beside the sources and are gitignored**: `vite.config.js`,
   `vite.config.d.ts`, `tailwind.config.js`, `tailwind.config.d.ts`, `*.tsbuildinfo`. Edit the
-  `.ts`; an edit to the `.js` is overwritten by the next `tsc -b` and never committed.
+  `.ts`; an edit to the `.js` is overwritten by the next `tsc -b` and never committed. The reverse
+  trap is worse: **Vite and Tailwind both load the `.js` before the `.ts`**, so an edit to
+  `vite.config.ts` or `tailwind.config.ts` has no effect under `npm run dev` until
+  `npm run build` regenerates the `.js` (then restart the dev server).
 - **This app has the weakest access guard and the most dangerous operations.** `RequireAdmin`
   checks only that a token string exists — not its validity or the user's role — while the pages
   behind it can delete a game along with every session and score ever recorded from it. The

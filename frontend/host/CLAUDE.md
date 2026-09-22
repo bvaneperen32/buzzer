@@ -53,7 +53,10 @@ just this one. The dev proxy assumes the backend is reachable at `localhost:8000
 - **Compiled config artifacts sit beside the sources and are gitignored**: `vite.config.js`,
   `vite.config.d.ts`, `tailwind.config.js`, `tailwind.config.d.ts`, `*.tsbuildinfo`. They're
   output from `tsc -b`. Always edit the `.ts` file — an edit to the `.js` looks like it works and
-  is then overwritten and never committed.
+  is then overwritten and never committed. The reverse trap is worse: **Vite and Tailwind both
+  load the `.js` before the `.ts`**, so an edit to `vite.config.ts` or `tailwind.config.ts` has no
+  effect under `npm run dev` until `npm run build` regenerates the `.js` (then restart the dev
+  server).
 - The dev proxy needs `ws: true` on `/socket.io` for the WebSocket upgrade. Without it, socket.io
   silently degrades to long-polling and the timing-sensitive parts of the game get much worse.
 - There is no test setup, no linter config, and no CI hook in this app — `tsc -b` during build is

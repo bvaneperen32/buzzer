@@ -50,7 +50,10 @@ the opposite of the host and player apps' socket payloads.
 or that the user is actually an `ADMIN`. A signed-in non-admin (a host, say) can load the entire
 console; every request then 403s and each page renders its own error string. The backend is safe
 — `require_admin` guards every endpoint — but the UI gives no useful signal about what went
-wrong, and there's no redirect back to `/login`.
+wrong, and there's no redirect back to `/login`. In production this is the *normal* case, not an
+edge case: the token is shared with the host and player apps (same origin, same `token` key), so
+anyone signed into the host app — or who joined a game as a guest — in that browser lands in the
+console.
 
 ### Question authoring owns an invariant the rest of the stack depends on
 

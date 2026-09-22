@@ -41,7 +41,9 @@ npm run preview      # serve the production build locally
 ```
 
 From the repo root, `npm run dev` runs all three apps concurrently and `npm run dev:player` runs
-just this one. The dev proxy expects the backend at `localhost:8000`.
+just this one. The dev proxy expects the backend at `localhost:8000`, and the backend's
+`CORS_ORIGINS` must include `http://localhost:5174` — socket.io rejects the connection otherwise,
+and the `config.py` default doesn't include it (your `.env` has to).
 
 **Testing on a real phone** needs more than `npm run dev`: the Vite server binds localhost by
 default, and the QR code encodes `window.location.origin` from the *host* app's browser, so a
@@ -56,7 +58,9 @@ phone on the same network can't resolve it without both dev servers listening on
 - **Compiled config artifacts sit beside the sources and are gitignored**: `vite.config.js`,
   `vite.config.d.ts`, `tailwind.config.js`, `tailwind.config.d.ts`, `*.tsbuildinfo` — all output
   from `tsc -b`. Edit the `.ts` file; an edit to the `.js` appears to work, then gets overwritten
-  and is never committed.
+  and is never committed. The reverse trap is worse: **Vite and Tailwind both load the `.js`
+  before the `.ts`**, so an edit to `vite.config.ts` or `tailwind.config.ts` has no effect under
+  `npm run dev` until `npm run build` regenerates the `.js` (then restart the dev server).
 - The dev proxy needs `ws: true` on `/socket.io`. Without it socket.io silently falls back to
   long-polling, which degrades answer-timing accuracy — the thing this app is most sensitive to.
 - `user-scalable=no` blocks pinch-zoom. Deliberate (prevents accidental zoom during fast tapping),

@@ -57,19 +57,36 @@ All three dev servers proxy to `localhost:8000`, so the backend must be running.
 production path, `npm run build` must be run before nginx has anything to serve — the compose
 file mounts `dist/` directories that do not exist until then.
 
+The backend's `CORS_ORIGINS` must list every dev port that opens a socket (`:5173` host, `:5174`
+player): socket.io checks the browser's `Origin`, and the Vite proxy passes it through unchanged.
+The `config.py` default omits `:5174`, so the player socket works in dev only if `.env` adds it.
+
 ## Cross-app conventions
 
 - **Naming follows the transport, not the app.** REST payloads are `snake_case` (matching the
-  backend's Pydantic schemas); socket server→client payloads are `camelCase`. The single
-  client→server socket message (`submit_answer`) is `snake_case`. Admin, being REST-only, is
-  `snake_case` throughout.
+  backend's Pydantic schemas); socket server→client payloads are `camelCase` — **except parts of
+  `sync_state`**: the host's `players` array and the player's `currentQuestion` are raw Redis
+  records in `snake_case` (see the backend's
+  [websocket/CLAUDE.md](../backend/app/websocket/CLAUDE.md)). Every client→server socket message is
+  `snake_case`: `join_room` (`room_code`, `role`), `submit_answer`, and the host's payload-less
+  `host_advance` / `host_lock_question`. Admin, being REST-only, is `snake_case` throughout.
 - **Auth is a bearer token in `localStorage`**, attached by each app's `lib/api.ts` and by the
-  socket `auth` callback. Only the player app checks expiry (`isTokenExpired`).
+  socket `auth` callback. Only the player app checks expiry (`isTokenExpired`). **All three apps
+  use the same key, `token`, and in production they share one origin** (nginx serves `/host/`,
+  `/player/`, and `/admin/` from `:8080`) — so one browser holds one token for all three. Signing
+  in anywhere signs every app in that browser in as that user: the player's "Play Again" signs the
+  host out, and a guest joining from the host's machine replaces the host's token with a guest's
+  (→ 403s). Dev hides this, because each Vite port is a separate origin.
 - **One socket, owned by `GameLayout`.** In host and player, a single `GameLayout` component opens
   the connection, maps every event to state, and exposes it through a React context. Child pages
   are views. No Redux, Zustand, or query library anywhere.
 - **The server owns the game.** Clients emit and react; they never decide phase transitions. Even
   routing is event-driven.
+- **Any socket `error` event is treated as fatal.** Both `GameLayout`s swap the whole game screen
+  for the message and a "Back to…" link, and clear it only on reconnect. The gateway uses `error`
+  for routine rejections too, so a player whose tap lands just after the question auto-locks
+  ("Question is locked") is ejected from the game. Separate recoverable errors before building on
+  this.
 - Styling is Tailwind with hardcoded slate/indigo colours, dark-only, no theme layer.
 
 ## Gotchas
@@ -104,9 +121,13 @@ conflicts in admin. Reading `message` first would fix all three. *Noted, not sch
 
 ### Cross-stack logic that must move together
 
+- **Question types** — adding one touches every app: host, player, and admin each switch on type
+  in several files. The one checklist is in the backend's
+  [app/CLAUDE.md](../backend/app/CLAUDE.md).
 - **Levenshtein distance** — three implementations: `rapidfuzz` in `game_service`, a hand-rolled
-  one in `report_service`, and a third in host's `ResultsPage`. All three decide whether a
-  fill-in-the-blank answer counts.
+  one in `report_service`, and a third in host's `ResultsPage`. `rapidfuzz` decides the score; the
+  other two decide what is *shown* as correct (the report's and the host's word clouds), so a
+  mismatch makes the display disagree with the score.
 - **Histogram bucketing** — host's `GameOverPage` and the backend's `report_service` mirror each
   other (the backend carries a comment saying so) and already disagree on rounding.
 - **Roster CSV parsing** — admin's `RosterPage` wizard reimplements `roster_service`, and they
@@ -127,4 +148,7 @@ conflicts in admin. Reading `message` first would fix all three. *Noted, not sch
 - `StrictMode` double-invokes effects in dev, so sockets connect twice and `load()` runs twice.
   Expected.
 - Gitignored build artifacts (`vite.config.js`, `tailwind.config.js`, `*.d.ts`, `*.tsbuildinfo`)
-  sit beside their `.ts` sources in all three apps — always edit the `.ts`.
+  sit beside their `.ts` sources in all three apps, emitted by `tsc -b`. Always edit the `.ts` —
+  but **Vite 5 loads `vite.config.js` before `vite.config.ts`, and Tailwind 3 loads
+  `tailwind.config.js` before its `.ts`**. A `.ts` edit therefore has no effect under
+  `npm run dev` until `npm run build` regenerates the `.js`; restart the dev server afterwards.

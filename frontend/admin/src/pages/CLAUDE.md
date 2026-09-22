@@ -16,7 +16,9 @@ reconciliation, and session exports. Eight pages, each a CRUD view over `/api/ad
 - `UsersPage.tsx` — list local accounts and create new ones. Rows link to the detail page.
 - `UserDetailPage.tsx` — edit a user, delete them, and grant/revoke course access (with
   HOST/PLAYER role) and game access via multi-select panels.
-- `GuestsPage.tsx` — list guest accounts, merge one into a real user by netid, or delete it.
+- `GuestsPage.tsx` — list guest accounts, merge one into a real user by netid, or delete it. If no
+  user has that netid, the backend **promotes the guest in place** into a `USER` with that netid
+  instead of failing — so a typo'd netid creates a bogus account rather than an error.
 - `GamesPage.tsx` — list, create, inline edit, delete, and **import a game JSON bundle**.
 - `QuestionEditorPage.tsx` — the largest page (~790 lines). Per-type question authoring forms,
   reordering, delete, and JSON export.
@@ -53,6 +55,11 @@ for the first three: only the top-scoring option(s) hit the max. For `multi_sele
 "correct" set can't be expressed that way, which is why the server sends the raw `answerPoints`
 array instead of `correctIndices` and lets clients mark each option with `points > 0`. Hand-built
 JSON that sets `points_value` independently will break both the reveal display and `is_correct`.
+
+One flaw in the derivation itself: for `multi_select` and `fill_in_the_blank`, `formToPayload`
+drops rows with blank text from the saved options/answers but computes `points_value` over *all*
+rows. A blank row that still carries points inflates `points_value` above anything an answer can
+score, so `is_correct` can never be true for that question.
 
 ### Editing a question skips validation the API applies on create
 
@@ -99,6 +106,10 @@ the two don't agree:
   sessions?" — accurate, but it's a native `confirm`, and the blast radius (every past session's
   results) deserves more than that.
 - `GuestsPage.deleteGuest` and `UserDetailPage.deleteUser` also cascade to score rows.
+- **Deleting a question fails for any question that has been answered** in any session — the
+  backend returns a 500 because it can't null `session_scores.question_id` (see
+  [routers/CLAUDE.md](../../../../backend/app/routers/CLAUDE.md)). With the `err.detail` bug the
+  author sees only `HTTP 500`.
 - `SessionsPage` uses a two-step inline confirm instead of `confirm()` — the better pattern,
   inconsistently applied.
 - `SessionsPage.handleDelete` calls `/game/sessions/{id}`, an endpoint on the **game** router, not

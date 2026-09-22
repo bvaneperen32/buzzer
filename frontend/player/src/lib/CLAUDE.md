@@ -33,7 +33,7 @@ failing at connect time.
   `detail` key. Every 401/403/404/409 therefore surfaces as a bare `HTTP <status>` and the
   server's real message is thrown away. This matters more here than elsewhere: a guest who picks
   an email already tied to a real account gets a specific, actionable message from the server
-  ("Please sign in instead") that the UI replaces with `HTTP 400`. Only 422 carries `detail`, and
+  ("Please sign in instead") that the UI replaces with `HTTP 409`. Only 422 carries `detail`, and
   there it's an array that stringifies into noise. The identical bug exists in the host and admin
   copies of this file.
 - **`isTokenExpired` does not verify the signature** — it only reads the `exp` claim. That's
@@ -44,5 +44,8 @@ failing at connect time.
 - `api` exposes only `get` and `post` — no `delete` or `put` (the host copy has `delete`). The
   three apps' clients have drifted; they aren't interchangeable.
 - The token is in `localStorage`, so it survives a tab close. `GameOverPage`'s "Play Again"
-  deliberately clears it — which also signs out a NetID user, not just a guest.
+  deliberately clears it — which also signs out a NetID user, not just a guest. And because all
+  three apps use the key `token` on one origin in production, clearing it (or a guest join
+  writing it) also affects a host or admin signed in in the same browser — see
+  [frontend/CLAUDE.md](../../../CLAUDE.md).
 - Responses are cast to `T` with no runtime validation.

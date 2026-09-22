@@ -46,6 +46,11 @@ handler format it; don't hand-build `JSONResponse` error bodies in routers.
   actively load-testing.
 - **The rate limiter has no shared backend.** slowapi defaults to in-memory storage, so counters
   are per-process and reset on restart; limits are not enforced across multiple workers.
+- **Outside development the key is `get_remote_address`, i.e. `request.client.host`.** Behind
+  nginx, uvicorn only rewrites that from `X-Forwarded-For` for trusted proxies
+  (`--forwarded-allow-ips`, default `127.0.0.1`), and the compose command doesn't set it — so every
+  request likely appears to come from the proxy and all clients share one bucket (five logins per
+  15 minutes for a whole class). Unverified against the production deployment.
 - `configure_logging()` must run before anything logs, or structlog falls back to defaults.
 - The validation handler deliberately routes `exc.errors()` through `jsonable_encoder` — Pydantic
   v2 can embed a raw exception object in a field validator's `ctx`, which otherwise turns a
@@ -54,6 +59,6 @@ handler format it; don't hand-build `JSONResponse` error bodies in routers.
   admin".
 - The catch-all `Exception` handler hides real errors behind a generic 500 message. When
   debugging, check the structlog output (`unhandled_error`) rather than the HTTP response.
-- `rate_limit.py` imports `settings` lazily *inside* the key function, and via the absolute
-  `app.config` path rather than a relative import. That's deliberate (avoids an import cycle at
-  module load) — keep it that way.
+- `rate_limit.py` imports `settings` lazily *inside* the key function, via the absolute
+  `app.config` path rather than a relative import. The code gives no reason, and there is no
+  import cycle to avoid (`config.py` imports nothing from `app`). Harmless either way.

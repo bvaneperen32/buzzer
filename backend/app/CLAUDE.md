@@ -18,6 +18,7 @@ itself.
   path matching. Don't "clean this up" into a `Mount`.
 - `config.py` — `Settings` (pydantic-settings, from env / `.env`) and the `settings` singleton.
   `is_development` and `is_stress_test_mode` gate a surprising amount of behavior; see below.
+  `CORS_ORIGINS` is also socket.io's Origin allowlist.
 - `database.py` — async SQLAlchemy engine, `AsyncSessionLocal`, the declarative `Base`, and the
   `get_db` dependency (commits on clean exit, rolls back on exception).
 - `redis_client.py` — a lazily-created module-level `Redis` singleton with `decode_responses=True`
@@ -33,7 +34,8 @@ itself.
 - [`models/`](models/CLAUDE.md) — SQLAlchemy ORM models.
 - [`common/`](common/CLAUDE.md) — auth dependencies, error hierarchy, logging, rate limiter.
 - `migrations/` — Alembic env and three revisions (`001` initial schema, `002` answer_data on
-  scores, `003` integer → float points). No context file; run with `alembic upgrade head`.
+  scores, `003` integer → float points). No context file; run `alembic upgrade head` from
+  `backend/`. `env.py` reads `DATABASE_URL` from the process environment, not from `settings`.
 
 ## Architecture
 
@@ -54,7 +56,9 @@ live in `services/` so they can be tested without a request or socket context �
 **Two stores, different roles.** MySQL is authoritative and durable: every answer is written to
 `session_scores` the moment it's scored, and leaderboards are aggregated from it. Redis holds
 live session state (room metadata, player set, current question, answered sets, answer
-distributions) and is treated as a fast cache that may vanish. When they disagree, MySQL wins.
+distributions) and is treated as a fast cache that may vanish. When they disagree, MySQL wins —
+but MySQL has no constraint against duplicate score rows (see "Data model and numbers"), and a
+vanished `room:{code}` key ends a live game (see "Redis lifecycle").
 
 **The one import rule that bites:** `common/dependencies.py` imports from
 `services/auth_service.py`, so `common` is not a leaf. Services must never import
@@ -62,19 +66,52 @@ distributions) and is treated as a fast cache that may vanish. When they disagre
 
 ## Cross-cutting invariants
 
-- **`answer_data` never reaches a client.** Three layers enforce it independently: `QuestionPublic`
-  omits it, the gateway's `_answer_reveal` emits only derived facts, and the game-over summaries
-  build their own reveal dicts. Any new payload must derive, never forward.
+- **Nothing that reveals the answer reaches a client before `QUESTION_RESULTS`.** That is the
+  invariant the code actually keeps — the stronger "`answer_data` never reaches a client" is not
+  true. During a question, the gateway's `_question_payload` sends `gradingType` and, for
+  fill-in-the-blank, `editDistance` (read from `answer_data`). At reveal time, `_answer_reveal`
+  and both game-over summary builders send derived facts for most types but *forward raw fields*
+  for two: `multi_select` gets the whole `answer_points` array, fill-in-the-blank gets
+  `acceptedAnswers`. `schemas/game.py`'s `QuestionPublic` is **not** a safeguard — nothing uses
+  it. New payloads should derive what they need, and nothing answer-revealing may go out in
+  `NEW_QUESTION` or `SYNC_STATE`.
 - **Question prompts are bleach-sanitized on write**, in all three admin write paths. This is
   load-bearing because `report_service` renders prompts as raw HTML. A new write path that skips
   bleach is a stored-XSS hole in the report.
-- **Adding a question type touches six-plus sites**: the regex in `schemas/admin.py` (×2),
-  `calculate_score`, `record_answer`'s distribution keys, both game-over summary builders, the
-  gateway's `_answer_reveal`, and three functions in `report_service`. The existing `multi_select`
-  type missed the `report_service` ones and renders as an empty card there — treat it as the
-  worked example of what incomplete looks like.
+- **Adding a question type touches about two dozen sites across the backend and all three
+  frontend apps** — the full list is in the next section. The existing `multi_select` type missed
+  the four `report_service` sites and renders as an empty card there; treat it as the worked
+  example of what incomplete looks like.
 - **The host drives every state transition.** Players only submit answers; phase changes come from
   `HOST_ADVANCE`. Don't add player-triggered advancement.
+
+## Adding a question type — the canonical checklist
+
+This is the one list; the other context files point here. Nothing enforces it — the DB column is
+a plain string, and every client has a silent fallback for an unknown type.
+
+**Backend**
+
+- `schemas/admin.py` — the type regex in `QuestionCreate` *and* `QuestionUpdate`, plus a branch
+  in `QuestionCreate.validate_structure`.
+- `services/game_service.py` — `calculate_score`, `record_answer`'s distribution key,
+  `get_player_question_summary`'s reveal, and `get_host_question_summary` (twice: its reveal *and*
+  its distribution rebuild).
+- `websocket/gateway.py` — `_answer_reveal`; `_question_payload` if the client needs extra
+  non-revealing fields (as fill-in-the-blank needs `editDistance`); and `on_submit_answer` if the
+  answer shape needs validating (only `multi_select` has a check today).
+- `services/report_service.py` — `_answer_reveal`, `_extract_answer_key`, the type-badge map (and
+  its CSS class), and the chart dispatch in `build_session_report`.
+
+**Frontend** (see [frontend/CLAUDE.md](../../frontend/CLAUDE.md))
+
+- host — `types/game.ts` (the type unions and `AnswerReveal`), `QuestionPage`'s type label,
+  `ResultsPage.buildBars` and the word-cloud branch, and `GameOverPage`'s `QuestionCard`.
+- player — `types/game.ts`, a `QuestionPage` branch (the answer controls),
+  `ResultsPage.describeAnswer`, and `GameOverPage`'s `describePlayerAnswer` /
+  `describeCorrectAnswer`.
+- admin — `QuestionEditorPage`: form state, `questionToForm`, `formToPayload` (including the
+  `points_value` derivation), and the list rendering.
 
 ## Gotchas
 
@@ -109,6 +146,11 @@ Running more than one uvicorn worker requires addressing all three.
 - API docs are served only in development; SQLAlchemy `echo` follows the same flag.
 - `STRESS_TEST_KEY` must be unset when not actively load-testing. It is both a rate-limit bypass
   (HTTP and WebSocket) and a verbose-logging switch.
+- `CORS_ORIGINS` is also socket.io's Origin allowlist, and a list there does **not** implicitly
+  allow same-origin. The Vite dev proxy forwards the browser's `Origin` unchanged, so every dev
+  port that opens a socket (`:5173` host, `:5174` player) must be listed. The `config.py` default
+  omits `:5174`; the player socket works in dev only if `.env` adds it, and there is no
+  `.env.example` to say so.
 
 ### Data model and numbers
 
@@ -118,6 +160,15 @@ Running more than one uvicorn worker requires addressing all three.
 - **Deletes destroy history.** `game_sessions.game_id` and `session_scores.user_id` are NOT NULL
   with no cascade, so `DELETE /api/admin/games/{id}` and `DELETE /api/admin/users/{id}` explicitly
   delete dependent score rows first. Removing a game erases every session ever played from it.
+- **Deleting an answered question 500s.** `DELETE /api/admin/games/{gid}/questions/{qid}` has no
+  pre-delete step, `Question.scores` has no cascade, and `session_scores.question_id` is NOT NULL
+  — so SQLAlchemy tries to null the FK and MySQL rejects it. A question that has been answered in
+  any session cannot be deleted.
+- **Nothing in MySQL prevents double-scoring.** `session_scores` has no unique constraint on
+  (session, user, question). The only guard is the gateway's Redis `has_answered` check, a
+  separate read before `record_answer` writes — not atomic. A double-submit race, or losing the
+  Redis `answered` set, can insert duplicate rows, and the "authoritative" MySQL leaderboard then
+  counts them. Guest merge can produce the same duplicates.
 - `Question.type` is an unconstrained `String(50)`; the allowlist exists only in Pydantic.
 
 ### Redis lifecycle
@@ -127,8 +178,12 @@ Running more than one uvicorn worker requires addressing all three.
   `delete_room_state` — which `complete_game` never calls, so completed sessions leak keys.
 - Room scans use `KEYS` in three places (room cap check, room cleanup, health). Fine at the
   50-room cap; the wrong primitive if that grows.
-- Redis loss is survivable by design — `rejoin_room` re-authorises and re-adds a missing player —
-  but `restore_from_mysql` does not actually repopulate Redis despite its name.
+- **Redis loss is not survivable mid-game.** Losing a player's keys is fine — `JOIN_ROOM`, which
+  every client sends on every (re)connect, re-authorises and re-adds a missing player. But if
+  `room:{code}` is lost (TTL, eviction, flush), `HOST_ADVANCE` fails with "Session state not
+  found" and every submit gets "No active question"; the game cannot continue. Nothing rebuilds
+  it: `restore_from_mysql` is never called, and wouldn't write to Redis if it were.
+  (`REJOIN_ROOM` has similar re-add logic, but no client sends it.)
 
 ### Security notes carried up from the leaves
 
@@ -138,7 +193,17 @@ Running more than one uvicorn worker requires addressing all three.
   proxy that strips client-supplied copies; if the backend port is directly reachable, those
   headers are a login-as-anyone.
 - Any `ADMIN` can join any session as HOST, and WebSocket rate limiting is per-IP — the wrong unit
-  for a lecture hall behind one NAT.
+  for a lecture hall behind one NAT — with the IP taken from the first `X-Forwarded-For` entry,
+  which the client controls, so the limit is also easy to bypass.
+- HTTP rate limiting keys on `request.client.host`. Behind nginx, uvicorn (run without
+  `--forwarded-allow-ips`) most likely reports the proxy's address, so every client shares one
+  bucket — five logins per 15 minutes for a whole class. Unverified against the production
+  deployment; check before relying on it.
+- **Guest identity is an unverified email.** `POST /api/auth/guest` with an existing guest's email
+  returns a token *for that guest*, so anyone who knows the address gets the account and its
+  scores. And because `users.email` is UNIQUE, a student who once joined as a guest with their
+  school email will likely 500 on their first SSO sign-in (`get_or_create_user_by_netid` inserts
+  a second row with the same email).
 - `POST /api/game/sessions/{id}/merge-guest` is not actually scoped to that session.
 - `GET /api/health` is unauthenticated, and its `activePlayers` figure is always 0 (wrong key
   prefix).
@@ -146,10 +211,13 @@ Running more than one uvicorn worker requires addressing all three.
 ## Working here
 
 ```bash
+# from backend/ (alembic.ini lives there), with DATABASE_URL exported
 alembic upgrade head                      # required before first run; bootstrap waits for it
-pytest                                    # or: pytest --cov=app
 ruff check . && ruff format .
 docker compose exec backend <command>
+
+# tests are NOT under backend/ — they live at the repo root (see ../CLAUDE.md)
+cd tests/unit && pytest -v
 ```
 
 Startup blocks (logging every 5s) until the schema exists rather than crashing — under

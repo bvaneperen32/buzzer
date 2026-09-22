@@ -31,7 +31,7 @@ is the same core with the extra verbs and helpers bolted on.
   *three* places here (`apiFetch`, `downloadFetch`, and `postForm`). All three read `err.detail`,
   but `BuzzerError` responses are `{"error": code, "message": ...}`. This is worst in this app,
   because admin endpoints raise the most specific errors: `ConflictError("Cannot delete an admin
-  account")`, `NotFoundError("No user with netid 'x' found")`, and every
+  account")`, `ConflictError("Username 'x' is already taken")`, and every
   `QuestionCreate.validate_structure` failure. The admin sees `HTTP 409` / `HTTP 404` / a
   stringified array instead. Fixing this one file would make the whole app meaningfully more
   usable.
@@ -45,4 +45,7 @@ is the same core with the extra verbs and helpers bolted on.
   holds — but it would silently fall back to `"download"` for an RFC 5987 `filename*` form.
 - No 401 handling and no refresh integration. An expired token turns every page into an error
   state with no redirect to `/login`; the guard in `App.tsx` only checks that a token exists.
+- The `token` key is shared with the host and player apps, which sit on the same origin in
+  production — a host or guest sign-in in the same browser replaces the admin's token. See
+  [frontend/CLAUDE.md](../../../CLAUDE.md).
 - Responses are cast to `T` with no runtime validation.

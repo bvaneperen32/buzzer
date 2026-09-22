@@ -42,11 +42,13 @@ main.tsx → App.tsx (routes, no guard)
 gameover`, and each maps to a route. `feedback` is the gap between submitting and the host
 revealing results — the player app has this extra state the host app doesn't.
 
-**The player reacts; it never decides.** One outbound event (`submit_answer`) and one outbound
-REST flow (joining). Everything else is server-driven, including navigation.
+**The player reacts; it never decides.** Two outbound socket events — `join_room`, sent by
+`GameLayout` on every connect and reconnect, and `submit_answer` — and one outbound REST flow
+(joining). Everything else is server-driven, including navigation.
 
-**Server→client payloads are camelCase; the one client→server payload is snake_case**
-(`question_id`, `answer_data`, `answer_time_ms`). REST is snake_case throughout.
+**Server→client payloads are camelCase — except `sync_state.currentQuestion`, a raw snake_case
+Redis record. Client→server payloads are snake_case** (`room_code` / `role`; `question_id`,
+`answer_data`, `answer_time_ms`). REST is snake_case throughout.
 
 ## Gotchas
 
@@ -54,18 +56,30 @@ REST flow (joining). Everything else is server-driven, including navigation.
 
 `ResultsPage` and `GameOverPage` both decide correctness as `points > 0`, while the server uses
 `points >= pointsValue`. Any partial-credit answer shows the player a green "Correct!" that the
-database records as incorrect. The server sends a real `isCorrect` on `answer_received`, but
-`PlayerResultsPayload` has no field for it. This is the most user-visible defect in the app.
+database records as incorrect. This is the most user-visible defect in the app — and the fix for
+`ResultsPage` is local: the server's authoritative `isCorrect` arrives on `answer_received` and
+is already stored in `GameContext` as `answerResult`; `ResultsPage` just doesn't read it. (It's
+absent after a refresh, and the game-over summary has no per-question `isCorrect` at all, so
+`GameOverPage` needs a server change.)
 
 ### Types understate the protocol
 
 `SyncStatePayload` declares only `status`, `playerCount`, and `questionLocked`. The server also
-sends `yourScore`, `currentQuestion`, and `hasAnswered` — all three are dropped. `hasAnswered` is
-the consequential one: a player reconnecting mid-question after answering gets a fresh, enabled
-answer UI.
+sends `yourScore`, `currentQuestion`, and `hasAnswered` — all three are dropped. Dropping
+`hasAnswered` is mostly harmless, because the server only re-sends the question (the late-join
+`new_question`) to players who *haven't* answered. The real reconnect gaps — stuck loading
+screens after a refresh, and no way back to final results — are in
+[pages/CLAUDE.md](pages/CLAUDE.md).
 
 `QuestionPayload.prompt` is typed and received but never rendered during a live question — a
 deliberate Jackbox-style choice (see [pages/CLAUDE.md](pages/CLAUDE.md)), not a bug.
+
+### Errors eject the player
+
+Any socket `error` event makes `GameLayout` replace the whole screen with the message and a "Back
+to Join" link, cleared only on reconnect. The gateway sends `error` for routine rejections — most
+often "Question is locked" when a tap lands just after the server's auto-lock (the phone's timer
+isn't synced to the server, so this happens in real games). The player is effectively kicked out.
 
 ### Divergence from the sibling apps
 

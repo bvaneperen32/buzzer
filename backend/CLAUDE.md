@@ -15,10 +15,14 @@ every game rule. The clients display state; this decides it.
 - `Dockerfile` — `python:3.12-slim` plus the build deps `asyncmy` and `cryptography` need. It
   has **no `CMD`**; the run command comes from `docker-compose.yml`.
 - `alembic.ini` — `script_location = app/migrations`. `sqlalchemy.url` is intentionally blank;
-  `app/migrations/env.py` supplies it from `settings.DATABASE_URL`.
+  `app/migrations/env.py` fills it from the **process environment** (`os.environ["DATABASE_URL"]`),
+  *not* from `settings` — so `.env` is not read and the `config.py` default doesn't apply. Compose
+  exports it via `env_file`; on the Windows venv, run `scripts\load_env.ps1` first or alembic gets
+  an empty URL.
 - `scripts/generate_keys.py` — generates the RS256 keypair for `JWT_PRIVATE_KEY` /
   `JWT_PUBLIC_KEY`. Run it once and put the base64 values in `.env`.
-- `logs/` — bind-mounted from the host, not part of the image.
+- `logs/` — not a directory here: compose bind-mounts the **repo-root** `./logs` over
+  `/app/logs`, so logs land in `<repo>/logs`, not `backend/logs`.
 
 ## How it runs
 
@@ -77,7 +81,9 @@ takes `db` and `redis` as arguments so it's testable without a request context.
 
 **MySQL is authoritative; Redis is live state.** Every answer is written to `session_scores` as
 it's scored, and leaderboards are aggregated from MySQL. Redis holds room metadata, the player
-set, the current question, and answer distributions. When they disagree, MySQL wins.
+set, the current question, and answer distributions. When they disagree, MySQL wins — with one
+hole: `session_scores` has no unique constraint on (session, user, question), so the only guard
+against double-scoring is a non-atomic Redis check (see [app/CLAUDE.md](app/CLAUDE.md)).
 
 ## Gotchas
 
@@ -128,10 +134,12 @@ and a verbose-logging switch.
   compare `is_correct` by exact float equality.
 - **Deletes destroy history.** `game_sessions.game_id` and `session_scores.user_id` are NOT NULL
   with no cascade, so the admin delete endpoints explicitly remove dependent rows first. Removing
-  a game erases every session ever played from it.
+  a game erases every session ever played from it. Question delete has no such step, so deleting
+  any question that has ever been answered fails with a 500.
 - **`Question.type` is an unconstrained `String(50)`** — the allowlist lives only in a Pydantic
-  regex. Adding a question type touches six-plus sites across four directories; the existing
-  `multi_select` missed three of them in `report_service`.
+  regex. Adding a question type touches about two dozen sites across the backend *and all three
+  frontend apps*; the canonical checklist is in [app/CLAUDE.md](app/CLAUDE.md). The existing
+  `multi_select` missed four of them in `report_service`.
 
 ### Security notes
 
@@ -141,7 +149,14 @@ and a verbose-logging switch.
   proxy that strips client-supplied copies; if port 8000 is directly reachable, those headers are
   a login-as-anyone. Compose publishes 8000 to the host.
 - WebSocket connection rate limiting is **per IP** — the wrong unit for a lecture hall behind one
-  NAT.
+  NAT — and it takes the IP from the first `X-Forwarded-For` entry, which the client controls.
+- HTTP rate limiting probably keys every client on nginx's address (uvicorn isn't told to trust
+  the proxy), so the whole class may share one bucket. Unverified against production.
+- **Guest identity is an unverified email.** Anyone who knows a guest's address gets that guest's
+  token and scores; and a student who once joined as a guest with their school email will likely
+  500 on first SSO sign-in (`users.email` is UNIQUE).
+- socket.io enforces `CORS_ORIGINS` against the browser's `Origin`. The `config.py` default omits
+  the player's dev port (`:5174`), so the player socket only works in dev if `.env` adds it.
 - `GET /api/health` is unauthenticated, and its `activePlayers` figure is always 0 (it queries a
   key prefix nothing writes).
 

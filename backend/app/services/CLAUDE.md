@@ -16,7 +16,8 @@ export/report generation actually live.
   missing rather than crashing (see its module docstring for why).
 - `state_service.py` — the Redis layer and the authoritative description of the key namespace
   (documented at the top of the file: `room:{code}`, `session:{id}:players`,
-  `:player:{uid}`, `:question`, `:answered:{qid}`, `:dist:{qid}`). Also `restore_from_mysql`.
+  `:player:{uid}`, `:question`, `:answered:{qid}`, `:dist:{qid}`). Also `restore_from_mysql`
+  (never called — see Gotchas).
 - `game_service.py` — the core. Room code generation, host access assertions, session lifecycle
   (`create_room` → `start_game` → `complete_game` / `abandon_game`), `authorise_player`,
   `calculate_score`, `record_answer`, and the leaderboard / game-over summary builders.
@@ -41,16 +42,22 @@ themselves, which is what makes them testable without a request context.
 
 ### Scoring and question types
 
-- **Adding a question type means touching at least five places**, and the current `multi_select`
-  type demonstrates what happens when you miss one: `report_service` has no `multi_select` branch
-  in `_answer_reveal`, `_extract_answer_key`, or its type-badge map, so those questions render in
-  the HTML report as a bare card with no distribution and an unstyled raw-slug badge. The other
-  four sites are `calculate_score`, `record_answer`'s distribution keys,
-  `get_player_question_summary`, and `get_host_question_summary`.
+- **Adding a question type touches about two dozen sites** — the canonical checklist, backend and
+  frontend, is in [app/CLAUDE.md](../CLAUDE.md). In this directory: `calculate_score`,
+  `record_answer`'s distribution key, `get_player_question_summary`, `get_host_question_summary`
+  (*two* switches — reveal and distribution), and four in `report_service`. The current
+  `multi_select` type shows what missing some looks like: `report_service` has no `multi_select`
+  branch in `_answer_reveal`, `_extract_answer_key`, its type-badge map, or the chart dispatch in
+  `build_session_report`, so those questions render in the HTML report as a bare card with no
+  distribution and an unstyled raw-slug badge.
+- `record_answer` writes a `SessionScore` row unconditionally. Deduplication is the caller's job
+  (the gateway's Redis `has_answered` check), and nothing in MySQL backs it up — see
+  [models/CLAUDE.md](../models/CLAUDE.md).
 - **`is_correct` is computed by exact float equality** (`points == question.points_value`) for
   `multiple_choice` and `true_false`. Authoring `0.1 + 0.2` style values, or any float that
   doesn't round-trip, silently marks a right answer wrong. `fill_in_the_blank` and `multi_select`
   use `>=`, which is safer — the inconsistency is not deliberate as far as the code shows.
+  `multi_select` additionally requires `points_value > 0`.
 - **"Correct" in the reveal payloads means `answer_points[i] >= points_value`.** If every option
   is worth 0 and `points_value` is 0, *every* option is reported correct.
 - `calculate_score` clamps `multi_select` to a floor of 0, so negative `answer_points` reduce a
@@ -96,9 +103,10 @@ themselves, which is what makes them testable without a request context.
   from `session_scores`), so this affects the Redis-cached running score only.
 - Its signature says `delta: int -> int`, and `add_player` says `score: int = 0`, but points are
   floats throughout. The annotations are wrong, not the behavior.
-- **`restore_from_mysql` does not write to Redis**, despite its docstring ("Rebuild Redis state")
-  and its unused `redis` parameter. It only reads MySQL and returns a dict; whatever calls it owns
-  the actual repopulation.
+- **`restore_from_mysql` is dead code.** Nothing calls it, and it wouldn't rebuild Redis if
+  something did: despite its docstring ("Rebuild Redis state") and its unused `redis` parameter,
+  it only reads MySQL and returns a dict. There is no Redis-recovery path — see
+  [app/CLAUDE.md](../CLAUDE.md).
 - `all_players_answered` returns `False` when the player count is 0, so an empty room never
   auto-advances.
 
@@ -113,6 +121,12 @@ themselves, which is what makes them testable without a request context.
 - `create_access_token` embeds `role`, but `get_current_user` re-reads the user from the DB, so a
   role change takes effect immediately rather than at token expiry. Don't start trusting the
   token's `role` claim instead.
+- **`create_guest_user` identifies a guest by email alone**, with no verification: an existing
+  guest's email returns that same user (display name updated), so anyone who knows the address
+  gets the account and its scores. And since `users.email` is UNIQUE, `get_or_create_user_by_netid`
+  will fail with an IntegrityError (a 500 at SSO login) when a guest row already holds the
+  student's email — e.g. they once joined as a guest with their school address. (Found by reading
+  the code, not reproduced.)
 - `authorise_player` returns the roster's `full_name` as the display name; the inline comment
   calling it "first name from CSV" reflects `process_roster_csv`'s behavior (below), not the
   column's meaning.
@@ -127,6 +141,9 @@ themselves, which is what makes them testable without a request context.
   the limit are skipped with an error appended, not rejected outright.
 - Deactivation is skipped entirely when `seen_netids` is empty, so a malformed upload can't wipe a
   roster — that guard is load-bearing.
+- **But rows that don't make it in get deactivated.** Deactivation runs against `seen_netids`, so
+  any existing student past the `MAX_ROWS` cap, or whose row was skipped for an error (a blank
+  email in the wizard path, say), is marked inactive and can no longer join.
 - **Both exporters derive the player list from `session_scores`**, so a player who joined but never
   answered a single question does not appear in either CSV at all.
 - `build_canvas_csv` writes empty `ID` and `SIS User ID` columns; Canvas matches on SIS Login ID
@@ -140,3 +157,5 @@ themselves, which is what makes them testable without a request context.
   code can't actually guarantee.
 - `report_service._levenshtein` is a hand-rolled reimplementation of what `game_service` gets from
   `rapidfuzz`. Two implementations of the same matching rule is a divergence risk.
+- `report_service._build_histogram` truncates `max_possible` and each score with `int()` — another
+  integer assumption left over from before migration `003`.

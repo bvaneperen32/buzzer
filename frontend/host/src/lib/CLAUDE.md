@@ -33,7 +33,9 @@ Auth token handling is split across the app rather than centralized here — `li
   carry `detail`, and there it's an *array*, so `new Error(detail)` stringifies it into something
   unreadable. Reading `message` first, then falling back, would fix both.
 - **The token lives in `localStorage`**, so it is readable by any script on the origin and is not
-  protected the way the backend's `httpOnly` refresh cookie is.
+  protected the way the backend's `httpOnly` refresh cookie is. It is also **shared**: all three
+  apps use the key `token`, and in production they share one origin, so a player or admin sign-in
+  in the same browser replaces the host's token — see [frontend/CLAUDE.md](../../../CLAUDE.md).
 - **There's no 401 handling and no refresh integration.** The backend issues a 7-day refresh
   cookie and exposes a refresh endpoint, but the client never calls it. When the 2-hour access
   token expires mid-session the user simply starts getting errors; `RequireAuth` only checks that

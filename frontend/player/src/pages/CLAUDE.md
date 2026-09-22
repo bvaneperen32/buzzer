@@ -38,7 +38,8 @@ questions, and reviewing results. Plus `GameLayout`, which owns the socket and a
 ## How it fits in
 
 `GameLayout` is the only stateful component; every `game/*` page is a view over `useGame()`.
-Players emit exactly one thing — `submit_answer` — and otherwise react to server events. Routing
+Pages emit exactly one thing — `submit_answer`, via `emitAnswer` — and `GameLayout` sends
+`join_room` on every connect and reconnect; everything else reacts to server events. Routing
 is event-driven: `new_question` → `/question`, `answer_received` → `/feedback`,
 `question_results` → `/results`, `game_over` → `/gameover`.
 
@@ -63,8 +64,9 @@ and typed, so it looks like an oversight. Don't "fix" it without checking the in
   partial-credit answer therefore displays a green "Correct!" to the player while the server
   recorded it as incorrect** — reachable today with `multi_select` and with per-option
   `answer_points` on multiple choice.
-- The server does send a true `isCorrect` on `answer_received`, but `PlayerResultsPayload` has no
-  such field, so the results screen has nothing authoritative to read.
+- The server's true `isCorrect` (from `answer_received`) is already in context as
+  `answerResult.isCorrect`; `ResultsPage` just doesn't use it. The game-over summary has no
+  per-question `isCorrect`, so making `GameOverPage` authoritative needs a server change.
 
 ### `multi_select` gaps
 
@@ -81,10 +83,20 @@ and typed, so it looks like an oversight. Don't "fix" it without checking the in
 - **`player_left` is never handled.** `playerCount` updates on `player_joined` and `sync_state`
   only, so the count drifts upward as players leave and only corrects on reconnect. The host app
   handles this event; this one doesn't.
-- **`sync_state`'s `hasAnswered` is ignored** — the player's `SyncStatePayload` type doesn't even
-  declare it, nor `currentQuestion`. A player who reconnects mid-question after answering gets a
-  fresh, enabled answer UI. Submitting again is harmless (the server is idempotent and the
-  `alreadyAnswered` echo is dropped), but the screen briefly lies about their state.
+- **`sync_state`'s `hasAnswered` and `currentQuestion` are ignored**, and for `IN_PROGRESS` it
+  doesn't navigate — it relies on the server's late-join `new_question`, which is sent only to
+  players who **haven't** answered. After a page refresh:
+  - mid-question, not yet answered — recovers (a fresh question with the remaining time);
+  - mid-question, already answered — usually on `/feedback`, which is static and fine; if the
+    `answer_received` never arrived, on `/question` showing "Loading question…" until the next
+    question;
+  - during results — "Loading results…" until the next question (`sync_state` has no results);
+  - after game over — the server rejects `join_room` for a `COMPLETED` game, so the player gets
+    the error screen and can't see their final results again.
+- The "Host disconnected" banner is cleared only by `new_question`. The server has no "host
+  reconnected" event, so once the host is back the banner stays up until the next question.
+- Any socket `error` replaces the whole screen (see [src/CLAUDE.md](../CLAUDE.md)); a tap just
+  after the auto-lock gets "Question is locked" and ejects the player.
 - `QuestionPage`'s `startTimeRef` is initialised at mount, so `answer_time_ms` measures from when
   the page rendered, not from when the server started the question. Network latency is included,
   and after a reconnect the elapsed time restarts from zero.
@@ -108,5 +120,6 @@ and typed, so it looks like an oversight. Don't "fix" it without checking the in
 ### Submission shape
 
 `emitAnswer` sends **snake_case** keys (`question_id`, `answer_data`, `answer_time_ms`), matching
-what the gateway reads. Every server→client payload is camelCase. That asymmetry is real — follow
-it rather than normalising.
+what the gateway reads (as does `join_room`: `room_code`, `role`). Every server→client payload is
+camelCase except `sync_state.currentQuestion`, which is a raw snake_case Redis record. That
+asymmetry is real — follow it rather than normalising.

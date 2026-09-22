@@ -8,12 +8,14 @@ HTTP routers only get you to the room; this drives play.
 
 ## Contents
 
-- `events.py` — event-name constants, grouped by direction (client→server, broadcast,
-  targeted, host-only). Import these as `E.NEW_QUESTION`; never hardcode event strings.
+- `events.py` — event-name constants. Import these as `E.NEW_QUESTION`; never hardcode event
+  strings. **Its grouping comments are wrong** ("broadcast to all in room" covers events that go
+  to the host or to one player) — see "Who receives what" below for the real routing.
 - `middleware.py` — `authenticate_socket(auth, db)`: validates the JWT from the socket.io `auth`
   dict and returns the `User`. Raises `ValueError`; the connect handler turns that into `False`.
 - `gateway.py` — everything else (~1300 lines): the `sio` server, the room/phase state machine,
-  timer and abandon background tasks, and the five event handlers.
+  timer and abandon background tasks, and the five event handlers. It also defines a
+  `socket_app` (line 61) that nothing uses — the real ASGI wrapping happens in `main.py`.
 
 ## Room and state model
 
@@ -30,15 +32,37 @@ The **host drives every transition** via `HOST_ADVANCE`. The phase machine lives
 Three module-level dicts hold per-process state: `_sid_ctx` (sid → user/role/room/session),
 `_timer_tasks` (session → question countdown), `_abandon_tasks` (session → host grace countdown).
 
+**Who receives what** (whatever the `events.py` comments say):
+
+- to `{room_code}` — `NEW_QUESTION`, `QUESTION_LOCKED`, `QUESTION_UNLOCKED`, `HOST_DISCONNECTED`,
+  `GAME_ABANDONED`.
+- to `{room_code}:host` only — `PLAYER_JOINED`, `PLAYER_LEFT`, `ANSWER_STATUS`,
+  `ANSWER_PHASE_ENDED`, and the host's versions of `QUESTION_RESULTS` and `GAME_OVER`.
+- to `user:{id}` — each player's own `QUESTION_RESULTS` and `GAME_OVER` (same event names as the
+  host's, different payloads).
+- to the sid — `SYNC_STATE`, `ANSWER_RECEIVED`, `ERROR`, and the late-join `NEW_QUESTION`.
+
+**Clients reconnect with `JOIN_ROOM`, not `REJOIN_ROOM`.** Host, player, `scripts/`, and the
+integration tests all send `JOIN_ROOM` on every connect *and* reconnect; nothing sends
+`REJOIN_ROOM`. Reason about reconnection through `on_join_room`.
+
 ## How it fits in
 
-Sits beside `routers/` as a second entry point, mounted as a sub-app from
-[main.py](../main.py). It authenticates through `services.auth_service` (via `middleware.py`)
+Sits beside `routers/` as a second entry point. It is **not** mounted as a sub-app:
+[main.py](../main.py) wraps the whole FastAPI app *inside* `socketio.ASGIApp(sio,
+other_asgi_app=app)`, so `/socket.io/*` is handled here and everything else falls through to
+FastAPI. It authenticates through `services.auth_service` (via `middleware.py`)
 and delegates all game logic to `services.game_service` / `services.state_service` — the gateway
 is orchestration and I/O, and new scoring or lifecycle rules belong in a service, not here.
 
-`_answer_reveal` is deliberately a *derived* view of `answer_data`. Raw `answer_data` must never
-be emitted to any client.
+For a narrative walkthrough of one answer travelling end to end, see
+[docs/realtime.md](../../../docs/realtime.md).
+
+`_answer_reveal` is *mostly* a derived view of `answer_data` — but for `multi_select` it forwards
+the raw `answer_points` array, and for fill-in-the-blank the raw `acceptedAnswers`. Separately,
+`_question_payload` sends `gradingType` and fill-in-the-blank's `editDistance` *during* the
+question. The invariant that actually holds is "nothing answer-revealing before
+`QUESTION_RESULTS`" — see [app/CLAUDE.md](../CLAUDE.md).
 
 ## Gotchas
 
@@ -70,8 +94,24 @@ be emitted to any client.
 - That connection limit is **per IP**, which is the wrong unit for the target setting — a lecture
   hall behind one campus NAT or one Wi-Fi gateway shares an IP, so a class joining at once can
   rate-limit itself. Dev is exempt; production isn't.
+- The IP comes from `_client_ip`, which trusts the **first** `X-Forwarded-For` value. nginx
+  appends to that header rather than replacing it, so a client can send its own value and choose
+  its IP — the limit is bypassable. The counters (`ws_rate:{ip}`, 10s TTL) live in Redis, so unlike
+  HTTP rate limiting they are shared across processes.
 - Late joiners get `remaining = max(5, time_limit - elapsed)` — always at least 5 seconds, even
-  if the question's time has fully expired.
+  if the question's time has fully expired. That push happens only in `JOIN_ROOM`, and only for a
+  player who **hasn't answered** yet; one who has gets `SYNC_STATE` alone, with no question
+  content.
+- **Double-submit protection is not atomic.** The `has_answered` check and the write
+  (`record_answer`, which then calls `mark_answered`) are separate steps, and MySQL has no unique
+  constraint to catch a duplicate — two near-simultaneous submits from one player can both be
+  scored.
+- `answer_time_ms` is taken from the client unvalidated (the player app measures it from page
+  mount, not from `started_at`). It only feeds `avgAnswerTimeMs`; don't base scoring on it.
+- Every rejection is an `ERROR` emit (`_emit_error`), and **both clients treat any `ERROR` as
+  fatal** — they replace the game screen until the next reconnect. A routine race like "Question
+  is locked" (a tap landing just after the auto-lock) therefore ejects the player. See
+  [frontend/CLAUDE.md](../../../frontend/CLAUDE.md).
 
 ### Payload and numeric issues
 
@@ -81,9 +121,16 @@ be emitted to any client.
 - **`yourScore` comes from Redis, `yourRank` from MySQL.** The Redis running score is maintained
   by the non-atomic `update_player_score`, so a player's displayed score and their rank can
   disagree after a lost update. MySQL is the source of truth.
-- `SYNC_STATE` is asymmetric: the host gets a full question payload (via `_host_question_payload`),
-  while the player gets the raw compact Redis record (`question_id`, `started_at`, …) with no
-  prompt or options. Players depend on the follow-up `NEW_QUESTION` for content.
+- `SYNC_STATE` is asymmetric, and parts of it break the camelCase convention every other
+  server→client payload follows. The host gets a full question payload (via
+  `_host_question_payload`), but its `players` array is the raw Redis player records — `user_id`,
+  `display_name`, `is_guest`, `score`, `is_connected`, all snake_case, including every player's
+  named running score. The player gets `currentQuestion` as the raw compact Redis record
+  (`question_id`, `started_at`, …, snake_case) with no prompt or options, and depends on the
+  follow-up `NEW_QUESTION` for content — which is sent only if they haven't answered (above).
+- `SYNC_STATE` carries no results or game-over data. A client that reconnects during `RESULTS` or
+  after `GAME_OVER` cannot recover what it missed, and for players `JOIN_ROOM` on a `COMPLETED`
+  session is rejected outright ("This game is not accepting players").
 - `q_scores` is annotated `dict[str, int]` but holds floats.
 
 ### Auth and access
@@ -93,8 +140,23 @@ be emitted to any client.
 - **Any `ADMIN` can join any session as HOST**, regardless of `host_user_id`, in both
   `JOIN_ROOM` and `REJOIN_ROOM`. Intentional as an override, but it means two hosts can drive one
   game and there is no "someone else is hosting" guard.
-- `REJOIN_ROOM` infers role from `host_user_id` rather than taking it from the client — don't
-  "simplify" it to trust a client-sent role.
+- **`REJOIN_ROOM` is not used by any client** (see "Room and state model"). It infers role from
+  `host_user_id`. `JOIN_ROOM` — the path clients actually use — takes `role` from the client, but
+  still requires `host_user_id` or `ADMIN` before granting `HOST`, so it's safe; don't loosen that
+  check.
+
+### Host disconnect and reconnect
+
+- When the host's socket drops during an `IN_PROGRESS` game, `disconnect` emits
+  `HOST_DISCONNECTED` (with `abandonAt`) to the room and starts the 5-minute abandon task. If a
+  question is open and unlocked, it is also **auto-locked**: the timer is cancelled, the remaining
+  time is saved in `timer_remaining_seconds`, and `question_locked_by_disconnect` is set.
+- When the host rejoins, `_auto_unlock_for_host` reverses that — but only for a lock it caused
+  (the flag), so a lock the host set by hand stays locked.
+- In `LOBBY`, a host disconnect does nothing: no event, no abandon timer.
+- **There is no "host reconnected" event.** Players learn the host is back only indirectly (a
+  `QUESTION_UNLOCKED`, or the next `NEW_QUESTION`), so the player app's "host disconnected" banner
+  stays up until the next question.
 
 ### Performance
 
