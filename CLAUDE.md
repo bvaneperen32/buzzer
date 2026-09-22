@@ -6,6 +6,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Buzzer** is a Jackbox-inspired real-time party quiz platform. A **Host** displays game state on a large screen while **Players** join and answer questions from their mobile browsers.
 
+## Where the system context lives
+
+This file covers the repo and its workflow. How the systems actually work is documented
+separately, closest to the code:
+
+- **[backend/CLAUDE.md](backend/CLAUDE.md)** — the FastAPI service: architecture, how it runs,
+  invariants, and known gotchas.
+- **[frontend/CLAUDE.md](frontend/CLAUDE.md)** — the three React apps, what they share, and where
+  they've drifted.
+
+Every source directory beneath those has its own `CLAUDE.md` (see the T3 list below). Claude Code
+loads them **on demand** — a directory's file arrives when a file in it is read, not at startup.
+That covers ordinary code work automatically, but a conversation that plans before opening
+anything gets none of it. **Before designing, reviewing, or planning, read the relevant
+`CLAUDE.md` files deliberately** — start at `backend/` or `frontend/` and follow the links down.
+
+These files record real defects found while writing them, marked as noted-not-scheduled. Treat
+them as current observations, not a backlog, and verify before acting on any one of them.
+
 ## Development Commands
 
 ### Docker Environment
