@@ -122,7 +122,7 @@ system:
 | **Session-host check** (`user_can_host_session`; used by the three rules below) | `ADMIN`, or `session.host_user_id == user.id` **and** HOST grant on `session.course_id` | — (a predicate; each rule below words its own denial) |
 | **Download rule** (session HTML report and CSV, on the host and game routers) | `session.status == 'COMPLETED'` **for every role**, and additionally the session-host check. `ADMIN` bypasses only the session-host check. 404 if the session doesn't exist | Non-admin: 403 `Only the session's host can download it` if the session-host check fails (checked first, so status isn't revealed to non-owners); then, for everyone, 409 `Downloads are available once the session has completed`. (The admin router's own download endpoints stay any-status; see Section 9) |
 | **Delete a session** (`DELETE /api/game/sessions/{id}`) | Session-host check, any status | 403 with the message the endpoint raises today; 404 if the session doesn't exist (as today) |
-| **Socket HOST join** (`JOIN_ROOM` with `role = HOST`, and `REJOIN_ROOM`'s role inference) | Session-host check (`ADMIN` keeps its existing override) | the gateway's existing `ERROR` emit with `You no longer have HOST access to this course` (both clients treat it as fatal, which is the intended outcome) |
+| **Socket HOST join** (`JOIN_ROOM` with `role = HOST`, and `REJOIN_ROOM`'s role inference) | Session-host check (`ADMIN` keeps its existing override) | the gateway's existing `ERROR` emit (both clients treat it as fatal, which is the intended outcome). The session's recorded host (`host_user_id == user.id`) who fails the check gets `You no longer have HOST access to this course`; any other user asking for HOST on `JOIN_ROOM` keeps today's `Not authorised as host for this session` |
 | **Create game** | Course rule on the chosen course | as course rule |
 | **Change a game's course** | `ADMIN` only (via the admin endpoint) | host endpoint rejects the field (422, `extra="forbid"`) |
 | **Delete a game** | `ADMIN` only (existing admin endpoint, unchanged). Admins reach it from an admin-only button on the host app's Games page | no host endpoint exists (405) |
@@ -235,10 +235,12 @@ Owns every game/question write. Services may import `models`, `schemas`, and
   `order_index` = max + 1 when absent (today's behavior).
 - `update_question(db, game_id, question_id, body: QuestionUpdate) -> Question` — 404 `Question
   {qid} not found in game {gid}`. Build the merged question: current stored values overlaid with
-  only the fields the client actually sent (`exclude_unset`). **Validate the merged result by
-  constructing a `QuestionCreate` from it**; on a Pydantic validation error raise
-  `UnprocessableError` whose message joins each error's `msg`. Then sanitize the prompt and
-  apply. This closes the gap where `PUT` skipped the structural checks `POST` applies
+  only the fields the client actually sent with a non-null value
+  (`exclude_unset=True, exclude_none=True`). An explicit `null` means "leave unchanged", as it
+  does today; overlaying it would write NULL into NOT NULL columns such as `order_index`.
+  **Validate the merged result by constructing a `QuestionCreate` from it**; on a Pydantic
+  validation error raise `UnprocessableError` whose message joins each error's `msg` with
+  `"; "`. Then sanitize the prompt and apply. This closes the gap where `PUT` skipped the structural checks `POST` applies
   (T7 explicitly warns about it). A question already stored in an invalid state will refuse edits
   until they make it valid — acceptable, and the message says why.
 - `delete_question(db, game_id, question_id)` — 404 as above; count distinct `session_id` in
@@ -360,8 +362,12 @@ on `get_db`'s commit-on-exit.
 **`websocket/gateway.py`** — the only gateway change:
 - In `on_join_room`, the check that grants the `HOST` role calls
   `game_service.user_can_host_session` in place of the bare `host_user_id`-or-`ADMIN` test. On
-  failure, `_emit_error` with the Section 4 message. Apply the same predicate where
-  `REJOIN_ROOM` infers the HOST role (no client sends it, but it must not become the bypass).
+  failure, `_emit_error` with `You no longer have HOST access to this course` if the user is the
+  session's recorded host (`host_user_id == user.id`), otherwise with today's `Not authorised as
+  host for this session`. `REJOIN_ROOM` (no client sends it, but it must not become the bypass)
+  infers HOST with the same predicate; if the recorded host fails it, emit the same `You no
+  longer have HOST access to this course` error and stop, rather than seating them as a player.
+  Everyone else follows today's player path.
 - The check runs only at join. A host whose HOST is revoked mid-game keeps their current socket;
   their next reconnect is refused, and the existing 5-minute abandon timer then ends the game
   (Section 9). Nothing else in the gateway changes.
@@ -430,9 +436,10 @@ non-page plumbing): type `Me` (`id`, `username`, `netid`, `display_name`, `role`
     replaces the host's token.
   - Otherwise provide `MeContext` and render the shell.
 - Render a fixed left sidebar modeled on admin's `AdminLayout` (same width, dense admin-style
-  sizing, not projector-scale): **Play** (`/home`), **Games** (`/games`), **Rosters**
-  (`/rosters`), **Sessions** (`/sessions`), and **Sign out** at the bottom (removes `token`,
-  goes to `/login`). Content in an `<Outlet />`.
+  sizing, not projector-scale), headed **Buzzer Host**: **Play** (`/home`), **Games**
+  (`/games`), **Rosters** (`/rosters`), **Sessions** (`/sessions`), and **Sign out** at the
+  bottom (removes `token`, goes to `/login`), with the lucide icons `PlayCircle`, `Gamepad2`,
+  `Users`, `History`, and `LogOut` respectively. Content in an `<Outlet />`.
 
 **`src/App.tsx` routes**
 ```
@@ -462,24 +469,30 @@ socket only on game routes.
   "Name (Semester)".
 - **"Allow guests"** checkbox, default checked; send `allow_guests` in `POST /game/rooms`.
 - Empty states: no courses → "You don't host any courses yet — ask an administrator for HOST
-  access." A course with no games → a link to the Games page.
+  access." A course with no games → "No games in this course yet — create or import one on the
+  Games page.", with "Games page" linking to `/games`.
 - The Active Sessions card (Rejoin / two-step Delete) is unchanged.
 
 **New `src/pages/GamesPage.tsx`** — ported from admin's `GamesPage`, adapted:
 - Loads `GET /game/my-games` and `GET /game/my-courses`. Games are grouped **by `course_id`**
   (not by name — same-name courses in different semesters must stay separate), under headings
-  "Name (Semester)". An **"Unassigned"** group is rendered for games with `course_id === null`;
-  only admins ever receive these (the server filters them), so no role check is needed to *show*
-  the group.
-- Create form: title, description, and a course select (from `my-courses`) →
-  `POST /host/games` → navigate to `/games/{id}`.
-- Import: file input plus a course select → `postForm('/host/games/import')` with FormData fields
+  "Name (Semester)", in the server's order (course name, then semester). An **"Unassigned"**
+  group is rendered last for games with `course_id === null`; only admins ever receive these
+  (the server filters them), so no role check is needed to *show* the group. A hosted course
+  with no games gets no heading (the create form's course select still lists it).
+- Create form: title, description, max players (kept from admin's form, which this page
+  replaces), and a course select (from `my-courses`) → `POST /host/games` → navigate to
+  `/games/{id}`.
+- Import: an **Import JSON** button opens a small card with a course select and a **Choose
+  file** button; picking a file sends `postForm('/host/games/import')` with FormData fields
   `file` and `course_id` → navigate to the new game's editor.
-- Inline edit of title/description → `PUT /host/games/{id}`.
+- The course selects in the create form and the import card are pre-selected when the user
+  hosts exactly one course.
+- Inline edit of title, description, and max players → `PUT /host/games/{id}`.
 - **Admins only** (`useMe().role === 'ADMIN'`): a course select on each game row, including
-  Unassigned → `PUT /admin/games/{id}` with `{course_id}`. Confirm first: "Moving this game changes
-  which hosts can use it — hosts who don't host the new course lose their access to it. Past
-  sessions keep their original course."
+  Unassigned → `PUT /admin/games/{id}` with `{course_id}`. Confirm first with native `confirm()`:
+  "Moving this game changes which hosts can use it — hosts who don't host the new course lose
+  their access to it. Past sessions keep their original course."
 - **Admins only:** a Delete button on each game row → `DELETE /admin/games/{id}`, behind a
   two-step inline confirm (the `SessionsPage` pattern, not `confirm()`) that says "This erases
   every session and score ever recorded for this game." Then reload.
@@ -498,13 +511,13 @@ all courses for an admin), each linking to `/rosters/:courseId`.
 
 **New `src/pages/RosterPage.tsx`** — a port of admin's `RosterPage` (CSV column-mapping wizard,
 roster list, inline row edit including `is_active`). `/admin/courses/{id}/roster...` →
-`/host/courses/{id}/roster...` (list, `/import`, `PATCH /{rosterId}`); back → `/rosters`. If
-the page needs the course name, take it from `GET /game/my-courses`.
+`/host/courses/{id}/roster...` (list, `/import`, `PATCH /{rosterId}`); back → `/rosters`. The
+heading reads "Roster — Name (Semester)", with the course taken from `GET /game/my-courses`.
 
 **New `src/pages/SessionsPage.tsx`** — a port of admin's `SessionsPage`:
-- List from `GET /host/sessions`. Hosts see a heading "Completed sessions you hosted". Admins also
-  get the status filter (passed as `?status=`) and the two-step Delete (calls the existing
-  `DELETE /game/sessions/{id}`). Hide both from non-admins.
+- List from `GET /host/sessions`. Hosts see a heading "Completed sessions you hosted"; admins
+  see "Sessions". Admins also get the status filter (passed as `?status=`) and the two-step
+  Delete (calls the existing `DELETE /game/sessions/{id}`). Hide both from non-admins.
 - Download controls (export panel and HTML report) appear **only on COMPLETED rows**, for every
   role, matching the server rule. Admins filtering to other statuses see those rows without
   download controls.
@@ -531,8 +544,8 @@ host (it's used in three places here: `apiFetch`, `downloadFetch`, `postForm`).
 - `RequireAdmin`: no token → `/login`. Otherwise `GET /auth/me`: loading → spinner; 401 →
   remove the token, go to `/login`; any other failure → the error with a Retry button (same as
   `HostShell`); `role !== 'ADMIN'` → a full-screen notice "This console is
-  for administrators." with a link to the host app (`hostAppUrl('/home')`) and a Sign out
-  button; otherwise `<Outlet />`.
+  for administrators." with a link to the host app (`hostAppUrl('/home')`, same tab) and a Sign
+  out button; otherwise `<Outlet />`.
 - `AdminLayout` sidebar, in order: **Users** (`/users`), **Courses** (`/courses`), **Guests**
   (`/guests`); then a divider and a muted **"Host tools"** label with plain anchors (not
   `NavLink`, and visually secondary with an external-link icon; they open in a new tab with
@@ -546,15 +559,19 @@ host (it's used in three places here: `apiFetch`, `downloadFetch`, `postForm`).
 post-login redirect must agree.)
 
 **`src/pages/CoursesPage.tsx`** — the per-course roster button becomes an anchor to
-`hostAppUrl('/rosters/{id}')`.
+`hostAppUrl('/rosters/{id}')` that opens in a new tab (`target="_blank" rel="noopener
+noreferrer"`), like the Host tools links.
 
 **`src/pages/UserDetailPage.tsx`** — game-access panel: build the set of course ids where this
 user's `course_access` role is `HOST`; offer only games from `GET /admin/games` whose `course_id`
 is in that set and not already granted; label each option "Title (Course name, Semester)" using
-the courses the page already loads. If nothing qualifies, show "Grant HOST on a course first —
-games can only be granted within courses the user hosts." After a HOST revoke or downgrade, the
-page's normal reload shows the removed game grants (removed server-side). The HOST revoke and
-downgrade controls warn first: "This also removes the user's access to this course's games."
+the courses the page already loads. If the user hosts no courses, show "Grant HOST on a course
+first — games can only be granted within courses the user hosts." in place of **Add Games**; if
+they host courses but no ungranted game remains, hide **Add Games** (as today). After a HOST
+revoke, the page's normal reload shows the removed game grants (removed server-side). Revoking a
+**HOST** row warns first with native `confirm()`: "This also removes the user's access to this
+course's games." The page has no control for downgrading HOST to PLAYER, and this change adds
+none; a downgrade through the API still triggers the server-side revoke (test 6).
 
 **Delete** `src/pages/GamesPage.tsx`, `QuestionEditorPage.tsx`, `RosterPage.tsx`, and
 `SessionsPage.tsx` from the admin app. Their functionality now lives in the host app.
@@ -795,6 +812,8 @@ Review these; change them here before implementing if you disagree.
   - A shared frontend package.
   - The manual `fetch` for the SSO temp-token exchange in the player's and host's `LoginPage`
     (they bypass `api.ts`, so the new error helper doesn't reach them).
+  - `README.md` — its admin-interface table and its game-import `curl` (which now needs a
+    `course_id` form field) go stale with this change; left unchanged here by owner decision.
 
 ---
 
@@ -873,3 +892,16 @@ After implementation, update — by editing only what's stale — these `CLAUDE.
   - **Tests:** tests 6, 7, 12, 13, 14, and 15 strengthened; 17 and 18 added.
   - **Owner clarification:** every change works within the existing role and permission system
     (§3 principle, §4 compliance table).
+- **2026-09-23 — implementation questions.** Before writing any code, the implementer raised
+  these gaps; the owner's decisions are now in the sections named:
+  - an explicit `null` in a question `PUT` means "unchanged" — the literal `exclude_unset` would
+    have written NULL into `order_index` (§5.4);
+  - socket HOST denials keep today's message for users who never hosted the session, and
+    `REJOIN_ROOM` refuses a revoked host instead of seating them as a player (§4, §5.6);
+  - UserDetailPage warns only on HOST revoke, since no downgrade control exists, and shows the
+    "Grant HOST first" message only when the user hosts no courses (§5.8);
+  - the host Games page keeps admin's max players field (§5.7);
+  - open UI details were settled: sidebar header and icons, group order, import card, course
+    pre-selection, confirm style, headings, empty-state copy, link targets, and the 422 message
+    separator (§5.4, §5.7, §5.8);
+  - `README.md` stays unchanged in this change (§9).
