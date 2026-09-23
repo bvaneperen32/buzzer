@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import io
-import json
 import uuid
 from typing import Annotated
 
-import bleach
 import structlog
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,15 +18,15 @@ from ..models.game import Game, Question, UserGameAccess
 from ..models.session import GameSession, SessionScore
 from ..models.user import User
 from ..schemas.admin import (
+    AdminGameUpdate,
     AdminSessionItem,
     CourseAccessGrant,
     CourseCreate,
     CourseResponse,
     CourseUpdate,
     GameAccessGrant,
-    GameCreate,
+    GameCreateRequest,
     GameResponse,
-    GameUpdate,
     QuestionCreate,
     QuestionReorder,
     QuestionResponse,
@@ -42,17 +40,14 @@ from ..schemas.admin import (
     UserUpdate,
     UserWithAccessResponse,
 )
+from ..services import game_management_service, game_service, roster_service
 from ..services.auth_service import hash_password
 from ..services.export_service import build_canvas_csv, build_session_csv
 from ..services.report_service import build_session_report
 from ..services.roster_service import process_roster_csv, process_roster_rows
 
-_SUPPORTED_IMPORT_VERSION = 1
-
 router = APIRouter(prefix="/admin", tags=["admin"])
 logger = structlog.get_logger()
-
-_PROMPT_TAGS = ["b", "i", "br", "u"]
 
 # ---------------------------------------------------------------------------
 # Courses
@@ -125,15 +120,7 @@ async def list_roster(
     _: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[CourseRoster]:
-    course = await db.get(Course, course_id)
-    if not course:
-        raise NotFoundError(f"Course {course_id} not found")
-    result = await db.execute(
-        select(CourseRoster)
-        .where(CourseRoster.course_id == course_id)
-        .order_by(CourseRoster.full_name)
-    )
-    return result.scalars().all()
+    return await roster_service.list_roster(db, course_id)
 
 
 @router.post("/courses/{course_id}/roster", response_model=RosterUploadResult)
@@ -179,24 +166,7 @@ async def patch_roster_entry(
     _: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> CourseRoster:
-    result = await db.execute(
-        select(CourseRoster).where(
-            CourseRoster.id == roster_id,
-            CourseRoster.course_id == course_id,
-        )
-    )
-    entry = result.scalar_one_or_none()
-    if not entry:
-        raise NotFoundError(f"Roster entry {roster_id} not found in course {course_id}")
-    if body.is_active is not None:
-        entry.is_active = body.is_active
-    if body.netid is not None:
-        entry.netid = body.netid.strip().lower()
-    if body.full_name is not None:
-        entry.full_name = body.full_name.strip()
-    if body.email is not None:
-        entry.email = str(body.email).lower()
-    return entry
+    return await roster_service.patch_roster_entry(db, course_id, roster_id, body)
 
 
 # ---------------------------------------------------------------------------
@@ -215,18 +185,14 @@ async def list_games(
 
 @router.post("/games", response_model=GameResponse, status_code=201)
 async def create_game(
-    body: GameCreate,
-    _: Annotated[User, Depends(require_admin)],
+    body: GameCreateRequest,
+    admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Game:
-    game = Game(
-        title=body.title, description=body.description, max_players=body.max_players
+    game = await game_management_service.create_game(
+        db, meta=body, course_id=body.course_id, creator=admin
     )
-    db.add(game)
-    await db.flush()
-    await db.refresh(game)
     await db.commit()
-    logger.info("game_created", game_id=game.id, title=body.title)
     return game
 
 
@@ -245,20 +211,16 @@ async def get_game(
 @router.put("/games/{game_id}", response_model=GameResponse)
 async def update_game(
     game_id: int,
-    body: GameUpdate,
+    body: AdminGameUpdate,
     _: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Game:
     game = await db.get(Game, game_id)
     if not game:
         raise NotFoundError(f"Game {game_id} not found")
-    if body.title is not None:
-        game.title = body.title
-    if body.description is not None:
-        game.description = body.description
-    if body.max_players is not None:
-        game.max_players = body.max_players
-    return game
+    return await game_management_service.update_game(
+        db, game, body, course_id=body.course_id
+    )
 
 
 @router.delete("/games/{game_id}", status_code=204)
@@ -294,18 +256,11 @@ async def delete_game(
 @router.get("/games/{game_id}/questions", response_model=list[QuestionResponse])
 async def list_questions(
     game_id: int,
-    _: Annotated[User, Depends(require_admin)],
+    admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[Question]:
-    game = await db.get(Game, game_id)
-    if not game:
-        raise NotFoundError(f"Game {game_id} not found")
-    result = await db.execute(
-        select(Question)
-        .where(Question.game_id == game_id)
-        .order_by(Question.order_index)
-    )
-    return result.scalars().all()
+    await game_service.assert_host_can_use_game(db, admin, game_id)
+    return await game_management_service.list_questions(db, game_id)
 
 
 @router.post(
@@ -314,45 +269,11 @@ async def list_questions(
 async def create_question(
     game_id: int,
     body: QuestionCreate,
-    _: Annotated[User, Depends(require_admin)],
+    admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Question:
-    game = await db.get(Game, game_id)
-    if not game:
-        raise NotFoundError(f"Game {game_id} not found")
-
-    # Sanitize prompt HTML server-side
-    clean_prompt = bleach.clean(
-        body.prompt, tags=_PROMPT_TAGS, attributes={}, strip=True
-    )
-
-    # Auto-assign order_index if not specified
-    if body.order_index is None:
-        result = await db.execute(
-            select(Question.order_index)
-            .where(Question.game_id == game_id)
-            .order_by(Question.order_index.desc())
-            .limit(1)
-        )
-        max_idx = result.scalar_one_or_none()
-        order_index = (max_idx + 1) if max_idx is not None else 0
-    else:
-        order_index = body.order_index
-
-    question = Question(
-        game_id=game_id,
-        type=body.type,
-        grading_type=body.grading_type,
-        prompt=clean_prompt,
-        config=body.config,
-        answer_data=body.answer_data,
-        time_limit_seconds=body.time_limit_seconds,
-        points_value=body.points_value,
-        order_index=order_index,
-    )
-    db.add(question)
-    await db.flush()
-    await db.refresh(question)
+    await game_service.assert_host_can_use_game(db, admin, game_id)
+    question = await game_management_service.create_question(db, game_id, body)
     await db.commit()
     return question
 
@@ -362,118 +283,44 @@ async def update_question(
     game_id: int,
     question_id: int,
     body: QuestionUpdate,
-    _: Annotated[User, Depends(require_admin)],
+    admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Question:
-    result = await db.execute(
-        select(Question).where(Question.id == question_id, Question.game_id == game_id)
-    )
-    question = result.scalar_one_or_none()
-    if not question:
-        raise NotFoundError(f"Question {question_id} not found in game {game_id}")
-
-    if body.type is not None:
-        question.type = body.type
-    if body.grading_type is not None:
-        question.grading_type = body.grading_type
-    if body.prompt is not None:
-        question.prompt = bleach.clean(
-            body.prompt, tags=_PROMPT_TAGS, attributes={}, strip=True
-        )
-    if body.config is not None:
-        question.config = body.config
-    if body.answer_data is not None:
-        question.answer_data = body.answer_data
-    if body.time_limit_seconds is not None:
-        question.time_limit_seconds = body.time_limit_seconds
-    if body.points_value is not None:
-        question.points_value = body.points_value
-    if body.order_index is not None:
-        question.order_index = body.order_index
-    return question
+    await game_service.assert_host_can_use_game(db, admin, game_id)
+    return await game_management_service.update_question(db, game_id, question_id, body)
 
 
 @router.delete("/games/{game_id}/questions/{question_id}", status_code=204)
 async def delete_question(
     game_id: int,
     question_id: int,
-    _: Annotated[User, Depends(require_admin)],
+    admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
-    result = await db.execute(
-        select(Question).where(Question.id == question_id, Question.game_id == game_id)
-    )
-    question = result.scalar_one_or_none()
-    if not question:
-        raise NotFoundError(f"Question {question_id} not found in game {game_id}")
-    await db.delete(question)
+    await game_service.assert_host_can_use_game(db, admin, game_id)
+    await game_management_service.delete_question(db, game_id, question_id)
 
 
 @router.post("/games/{game_id}/questions/reorder", status_code=204)
 async def reorder_questions(
     game_id: int,
     body: QuestionReorder,
-    _: Annotated[User, Depends(require_admin)],
+    admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
-    game = await db.get(Game, game_id)
-    if not game:
-        raise NotFoundError(f"Game {game_id} not found")
-
-    result = await db.execute(select(Question).where(Question.game_id == game_id))
-    questions = {q.id: q for q in result.scalars().all()}
-
-    if set(body.order) != set(questions.keys()):
-        raise ConflictError(
-            "order list must contain exactly the IDs of all questions in this game"
-        )
-
-    for idx, qid in enumerate(body.order):
-        questions[qid].order_index = idx
+    await game_service.assert_host_can_use_game(db, admin, game_id)
+    await game_management_service.reorder_questions(db, game_id, body.order)
 
 
 @router.get("/games/{game_id}/export")
 async def export_game(
     game_id: int,
-    _: Annotated[User, Depends(require_admin)],
+    admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> StreamingResponse:
+    await game_service.assert_host_can_use_game(db, admin, game_id)
     game = await db.get(Game, game_id)
-    if not game:
-        raise NotFoundError(f"Game {game_id} not found")
-
-    result = await db.execute(
-        select(Question)
-        .where(Question.game_id == game_id)
-        .order_by(Question.order_index)
-    )
-    questions = result.scalars().all()
-
-    bundle = {
-        "format": "buzzer/game",
-        "version": _SUPPORTED_IMPORT_VERSION,
-        "game": {
-            "title": game.title,
-            "description": game.description,
-            "max_players": game.max_players,
-        },
-        "questions": [
-            {
-                "type": q.type,
-                "grading_type": q.grading_type,
-                "prompt": q.prompt,
-                "config": q.config,
-                "answer_data": q.answer_data,
-                "time_limit_seconds": q.time_limit_seconds,
-                "points_value": q.points_value,
-            }
-            for q in questions
-        ],
-    }
-
-    safe_title = "".join(c if c.isalnum() or c in " _-" else "_" for c in game.title)
-    filename = f"{safe_title}.json"
-    content = json.dumps(bundle, indent=2, ensure_ascii=False).encode()
+    filename, content = await game_management_service.export_game(db, game)
     return StreamingResponse(
         io.BytesIO(content),
         media_type="application/json",
@@ -484,75 +331,14 @@ async def export_game(
 @router.post("/games/import", status_code=201)
 async def import_game(
     file: Annotated[UploadFile, File(description="buzzer/game JSON bundle")],
-    _: Annotated[User, Depends(require_admin)],
+    course_id: Annotated[int, Form(description="Course the imported game belongs to")],
+    admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:
-    raw = await file.read()
-    try:
-        bundle = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid JSON: {exc}") from exc
-
-    if bundle.get("format") != "buzzer/game":
-        raise HTTPException(status_code=422, detail="Unrecognised file format")
-    version = bundle.get("version")
-    if version != _SUPPORTED_IMPORT_VERSION:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Unsupported version {version!r}; server supports version {_SUPPORTED_IMPORT_VERSION}",
-        )
-
-    game_data = bundle.get("game", {})
-    try:
-        game_meta = GameCreate(**game_data)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=422, detail=f"Invalid game metadata: {exc}"
-        ) from exc
-
-    questions_raw = bundle.get("questions", [])
-    validated_questions: list[QuestionCreate] = []
-    for i, q in enumerate(questions_raw):
-        try:
-            validated_questions.append(QuestionCreate(**q))
-        except Exception as exc:
-            raise HTTPException(
-                status_code=422, detail=f"Question {i + 1} invalid: {exc}"
-            ) from exc
-
-    game = Game(
-        title=game_meta.title,
-        description=game_meta.description,
-        max_players=game_meta.max_players,
+    game = await game_management_service.import_game(
+        db, await file.read(), course_id=course_id, creator=admin
     )
-    db.add(game)
-    await db.flush()
-
-    for idx, q in enumerate(validated_questions):
-        clean_prompt = bleach.clean(
-            q.prompt, tags=_PROMPT_TAGS, attributes={}, strip=True
-        )
-        db.add(
-            Question(
-                game_id=game.id,
-                type=q.type,
-                grading_type=q.grading_type,
-                prompt=clean_prompt,
-                config=q.config,
-                answer_data=q.answer_data,
-                time_limit_seconds=q.time_limit_seconds,
-                points_value=q.points_value,
-                order_index=idx,
-            )
-        )
-
     await db.commit()
-    logger.info(
-        "game_imported",
-        game_id=game.id,
-        title=game.title,
-        question_count=len(validated_questions),
-    )
     return {"game_id": game.id}
 
 
