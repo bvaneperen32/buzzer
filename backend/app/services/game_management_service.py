@@ -23,6 +23,7 @@ from ..models.game import Game, Question, UserGameAccess
 from ..models.session import SessionScore
 from ..models.user import User
 from ..schemas.admin import GameCreate, GameUpdate, QuestionCreate, QuestionUpdate
+from . import game_service
 
 logger = structlog.get_logger()
 
@@ -71,11 +72,13 @@ async def update_game(
     db: AsyncSession, game: Game, changes: GameUpdate, *, course_id: int | None = None
 ) -> Game:
     # course_id comes in separately (admin path only) so that it goes through the
-    # existence check here — never read it off `changes` with a plain setattr.
+    # existence check and grant revocation here — never read it off `changes` with a
+    # plain setattr.
     if course_id is not None and course_id != game.course_id:
         if not await db.get(Course, course_id):
             raise NotFoundError(f"Course {course_id} not found")
         game.course_id = course_id
+        await game_service.revoke_game_grants_without_host(db, game.id, course_id)
 
     if changes.title is not None:
         game.title = changes.title

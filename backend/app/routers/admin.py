@@ -318,8 +318,7 @@ async def export_game(
     admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> StreamingResponse:
-    await game_service.assert_host_can_use_game(db, admin, game_id)
-    game = await db.get(Game, game_id)
+    game = await game_service.assert_host_can_use_game(db, admin, game_id)
     filename, content = await game_management_service.export_game(db, game)
     return StreamingResponse(
         io.BytesIO(content),
@@ -512,6 +511,10 @@ async def grant_course_access(
     )
     existing = result.scalar_one_or_none()
     if existing:
+        if existing.role == "HOST" and body.role == "PLAYER":
+            await game_service.revoke_game_grants_for_course(
+                db, user_id, body.course_id
+            )
         existing.role = body.role  # update role if access already exists
     else:
         db.add(
@@ -537,6 +540,8 @@ async def revoke_course_access(
         raise NotFoundError(
             f"No course access record for user {user_id} / course {course_id}"
         )
+    if access.role == "HOST":
+        await game_service.revoke_game_grants_for_course(db, user_id, course_id)
     await db.delete(access)
 
 
@@ -553,6 +558,14 @@ async def grant_game_access(
     game = await db.get(Game, body.game_id)
     if not game:
         raise NotFoundError(f"Game {body.game_id} not found")
+    # A grant only takes effect alongside HOST on the game's course, so refuse
+    # one that would be dead on arrival.
+    if game.course_id is None:
+        raise ConflictError("Assign this game to a course before granting access")
+    if not await game_service.has_host_grant(db, user_id, game.course_id):
+        raise ConflictError(
+            "User must be a HOST of this game's course before being granted the game"
+        )
 
     result = await db.execute(
         select(UserGameAccess).where(
