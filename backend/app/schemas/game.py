@@ -29,6 +29,7 @@ class RoomCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     game_id: int
     course_id: int
+    allow_guests: bool = True
 
     @field_validator("game_id", "course_id")
     @classmethod
@@ -82,6 +83,10 @@ class MyGameItem(BaseModel):
     title: str
     description: str
     max_players: int
+    # All three are None for an unassigned game (only admins are ever sent one).
+    course_id: int | None = None
+    course_name: str | None = None
+    course_semester: str | None = None
 
 
 # ---------------------------------------------------------------------------

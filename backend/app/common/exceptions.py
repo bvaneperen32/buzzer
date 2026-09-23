@@ -37,6 +37,14 @@ class ConflictError(BuzzerError):
         super().__init__("CONFLICT", message, status.HTTP_409_CONFLICT)
 
 
+class UnprocessableError(BuzzerError):
+    """A 422 with the standard {"error", "message"} body — unlike FastAPI's request
+    validation 422, whose `detail` is an array."""
+
+    def __init__(self, message: str = "Unprocessable"):
+        super().__init__("UNPROCESSABLE", message, status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(BuzzerError)
     async def buzzer_error_handler(request: Request, exc: BuzzerError) -> JSONResponse:

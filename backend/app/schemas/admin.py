@@ -92,11 +92,22 @@ class GameCreate(BaseModel):
     max_players: int = Field(150, ge=1, le=500)
 
 
+class GameCreateRequest(GameCreate):
+    # GameCreate also validates the `game` section of import bundles, which stay
+    # portable across databases — so the course id lives only on the request body.
+    course_id: int = Field(..., gt=0)
+
+
 class GameUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=5000)
     max_players: int | None = Field(None, ge=1, le=500)
+
+
+class AdminGameUpdate(GameUpdate):
+    # Admin only: a course can be set or changed, never cleared.
+    course_id: int | None = Field(None, gt=0)
 
 
 class GameResponse(BaseModel):
@@ -105,6 +116,7 @@ class GameResponse(BaseModel):
     title: str
     description: str
     max_players: int
+    course_id: int | None
     created_at: datetime
 
 

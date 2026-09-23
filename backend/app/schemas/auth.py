@@ -35,6 +35,15 @@ class RefreshResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class MeResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    username: str | None
+    netid: str | None
+    display_name: str | None
+    role: str
+
+
 class GuestJoinRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=50)
     email: EmailStr
