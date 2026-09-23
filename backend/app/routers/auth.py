@@ -9,15 +9,21 @@ from fastapi.responses import HTMLResponse
 from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..common.dependencies import _token_from_request, get_refresh_token
+from ..common.dependencies import (
+    _token_from_request,
+    get_current_user,
+    get_refresh_token,
+)
 from ..common.exceptions import UnauthorizedError
 from ..common.rate_limit import limiter
 from ..redis_client import get_redis
 from ..config import settings
 from ..database import get_db
+from ..models.user import User
 from ..schemas.auth import (
     GuestJoinRequest,
     LoginRequest,
+    MeResponse,
     RefreshResponse,
     TempTokenResponse,
     TokenResponse,
@@ -194,13 +200,21 @@ async def guest_join(
     redis=Depends(get_redis),
 ) -> TokenResponse:
     from ..services.state_service import get_room_state
-    from ..common.exceptions import NotFoundError, ConflictError
+    from ..common.exceptions import NotFoundError, ConflictError, ForbiddenError
+    from ..models.session import GameSession
+    from ..services.game_service import GUESTS_NOT_ALLOWED
 
     room_state = await get_room_state(redis, body.room_code.upper())
     if not room_state:
         raise NotFoundError(f"Room '{body.room_code}' not found or has expired")
     if room_state.get("status") not in ("LOBBY", "IN_PROGRESS"):
         raise ConflictError("This game has already ended")
+
+    # Refuse before creating a guest user the room would reject anyway.
+    session_id = room_state.get("session_id")
+    session = await db.get(GameSession, session_id) if session_id else None
+    if session and not session.allow_guests:
+        raise ForbiddenError(GUESTS_NOT_ALLOWED)
 
     try:
         user = await create_guest_user(db, body.display_name, str(body.email))
@@ -255,3 +269,15 @@ async def refresh_token(
 @router.post("/logout", status_code=204)
 async def logout(response: Response) -> None:
     _clear_refresh_cookie(response)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/auth/me
+# ---------------------------------------------------------------------------
+
+
+@router.get("/me")
+async def me(user: Annotated[User, Depends(get_current_user)]) -> MeResponse:
+    """The current user, freshly loaded, so the frontends can show role-appropriate
+    UI. Display only — every endpoint still enforces the role itself."""
+    return MeResponse.model_validate(user)
