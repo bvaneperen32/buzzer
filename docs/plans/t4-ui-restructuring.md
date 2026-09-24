@@ -1,6 +1,6 @@
 # T4 — UI Restructuring (Host and Admin Interfaces)
 
-Status: design agreed and goldfish-tested; revised on 2026-09-23 (see Section 12). Not yet
+Status: design agreed and goldfish-tested; revised on 2026-09-23 and 2026-09-24 (see Section 12). Not yet
 implemented. Source requirement: `instructions.md` → T4.
 This document is the implementation contract. If implementation reveals a flaw, update this
 file first, then the code.
@@ -471,7 +471,8 @@ socket only on game routes.
 - Empty states: no courses → "You don't host any courses yet — ask an administrator for HOST
   access." A course with no games → "No games in this course yet — create or import one on the
   Games page.", with "Games page" linking to `/games`.
-- The Active Sessions card (Rejoin / two-step Delete) is unchanged.
+- The Active Sessions card (Rejoin / two-step Delete) is unchanged, except that its course line
+  reads "Name (Semester)" (§5.3).
 
 **New `src/pages/GamesPage.tsx`** — ported from admin's `GamesPage`, adapted:
 - Loads `GET /game/my-games` and `GET /game/my-courses`. Games are grouped **by `course_id`**
@@ -524,6 +525,7 @@ heading reads "Roster — Name (Semester)", with the course taken from `GET /gam
 - Export options panel (Canvas vs raw, assignment title, SIS domain, roster-only, per-question)
   → `download('/host/sessions/{id}/export?...')`; HTML report →
   `download('/host/sessions/{id}/report')`.
+- Each row's course reads "Name (Semester)" (§5.3), not admin's "Name · Semester".
 
 REST types stay page-local (the admin convention); `course_id` is typed `number | null`
 everywhere.
@@ -571,7 +573,9 @@ they host courses but no ungranted game remains, hide **Add Games** (as today). 
 revoke, the page's normal reload shows the removed game grants (removed server-side). Revoking a
 **HOST** row warns first with native `confirm()`: "This also removes the user's access to this
 course's games." The page has no control for downgrading HOST to PLAYER, and this change adds
-none; a downgrade through the API still triggers the server-side revoke (test 6).
+none; a downgrade through the API still triggers the server-side revoke (test 6). Its existing
+course labels (the course-access list and the add-course picker) change from "Name — Semester"
+to "Name (Semester)" (§5.3).
 
 **Delete** `src/pages/GamesPage.tsx`, `QuestionEditorPage.tsx`, `RosterPage.tsx`, and
 `SessionsPage.tsx` from the admin app. Their functionality now lives in the host app.
@@ -905,3 +909,6 @@ After implementation, update — by editing only what's stale — these `CLAUDE.
     pre-selection, confirm style, headings, empty-state copy, link targets, and the 422 message
     separator (§5.4, §5.7, §5.8);
   - `README.md` stays unchanged in this change (§9).
+- **2026-09-24 — implementation, step 6.** §5.3's "Name (Semester)" applies to every course
+  label, including Play's Active Sessions card, the host SessionsPage rows, and UserDetailPage's
+  course-access panel (§5.7, §5.8).
