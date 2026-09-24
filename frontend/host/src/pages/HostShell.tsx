@@ -90,11 +90,12 @@ export default function HostShell() {
   return (
     <MeContext.Provider value={me}>
       <div className="flex min-h-screen">
-        <aside className="w-56 shrink-0 bg-slate-900 border-r border-slate-700 flex flex-col">
+        {/* Sticky and viewport-high so Sign out stays in view however long the page is */}
+        <aside className="w-56 shrink-0 sticky top-0 h-screen bg-slate-900 border-r border-slate-700 flex flex-col">
           <div className="px-6 py-5 border-b border-slate-700">
             <h1 className="text-lg font-bold text-white">Buzzer Host</h1>
           </div>
-          <nav className="flex-1 p-3 space-y-1">
+          <nav className="flex-1 overflow-y-auto p-3 space-y-1">
             <NavLink to="/home" className={linkClass}>
               <PlayCircle size={16} /> Play
             </NavLink>
