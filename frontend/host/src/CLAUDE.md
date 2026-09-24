@@ -2,19 +2,24 @@
 
 ## Purpose
 
-The Host application: the big-screen view of a live game. It shows the room code and QR for
-joining, presents each question, visualises answers as they arrive, and gives the host the
-controls that drive the game forward. It is the only client that can advance game state.
+The Host application, in two parts. The **game screens** are the big-screen view of a live game:
+they show the room code and QR for joining, present each question, visualise answers as they
+arrive, and give the host the controls that drive the game forward. This is the only client that
+can advance game state. The **management pages**, inside a sidebar shell, are where a host
+creates and edits games and questions, manages course rosters, and downloads completed sessions'
+results, for the courses they HOST. Admins use them too.
 
 ## Contents
 
 **Application-level files**
 
 - `main.tsx` — entry point. Mounts `<App />` into `#root` inside `<StrictMode>`.
-- `App.tsx` — router. Defines `/login`, `/home`, and the nested `/game/:code/*` routes
-  (`lobby`, `question`, `results`, `gameover`), wraps protected routes in `RequireAuth`, and
-  sends anything unmatched to `/login`. Uses `basename={import.meta.env.BASE_URL}` because the
-  app is served under the `/host` path.
+- `App.tsx` — router. `/login`; a pathless `RequireAuth` → `HostShell` layout route holding
+  `/home` (Play), `/games`, `/games/:gameId`, `/rosters`, `/rosters/:courseId`, and `/sessions`;
+  and the nested `/game/:code/*` routes (`lobby`, `question`, `results`, `gameover`) *outside*
+  the shell. `/` and anything unmatched go to `/home` (`RequireAuth` sends signed-out users on
+  to `/login`). Uses `basename={import.meta.env.BASE_URL}` because the app is served under the
+  `/host` path.
 - `index.css` — Tailwind directives plus the dark slate background (`#0f172a`) the whole app
   assumes.
 - `types/game.ts` — every socket payload and shared type: `SyncStatePayload`, `QuestionPayload`,
@@ -23,22 +28,30 @@ controls that drive the game forward. It is the only client that can advance gam
 
 **Subdirectories** — each has its own `CLAUDE.md`:
 
-- [`pages/`](pages/CLAUDE.md) — all screens, plus `GameLayout`, which owns the socket and all
-  game state.
+- [`pages/`](pages/CLAUDE.md) — all screens: `HostShell` and the management pages, plus
+  `GameLayout`, which owns the socket and all game state, and its game screens.
 - [`components/`](components/CLAUDE.md) — presentational primitives (`Button`, `Card`, `Input`)
   and `TimerBar`.
-- [`lib/`](lib/CLAUDE.md) — the REST client and the `cn` class-name helper.
+- [`lib/`](lib/CLAUDE.md) — the REST client (with `ApiError`, uploads, and downloads), the
+  in-memory current-user context (`useMe`), and the `cn` class-name helper.
 
 ## Architecture
 
 ```
 main.tsx → App.tsx (routes, RequireAuth)
+              ├── pages/HostShell.tsx ── GET /auth/me → MeContext, sidebar
+              │      └── Play / Games / QuestionEditor / Rosters / Roster / Sessions
+              │             (REST only: load → mutate → reload, via lib/api.ts)
               └── pages/game/GameLayout.tsx ── socket.io ──→ backend gateway
                      │  owns ALL game state, provides GameContext
                      └── Lobby / Question / Results / GameOver  (read useGame())
                                     ↑
-                     components/ (dumb)      lib/api.ts (REST: setup + teardown only)
+                     components/ (dumb)      lib/api.ts (REST: game title only here)
 ```
+
+**Two halves, deliberately separate.** The game screens stay outside the shell, so they're
+full-screen on the projector and the socket opens only on game routes. The management pages are
+REST-only and follow the admin app's page pattern.
 
 **One socket, one state owner.** `GameLayout` opens the single socket.io connection, maps every
 server event onto state, and exposes it via `useGame()`. Child pages are views: they read context
@@ -77,7 +90,7 @@ guarantee:
 
 ### Logic duplicated across the stack
 
-Three pieces of logic exist in both this app and the backend and must be changed together:
+Four pieces of logic exist in both this app and the backend and must be changed together:
 
 - **Levenshtein matching** — here in `ResultsPage`, and twice in the backend.
 - **Histogram bucketing** — `GameOverPage.chooseWidth`/`buildBuckets` mirrors
@@ -85,17 +98,23 @@ Three pieces of logic exist in both this app and the backend and must be changed
   rounding.
 - **`multi_select` per-option correctness** — derived client-side as `answerPoints[i] > 0`,
   because the server sends raw `answerPoints` rather than `correctIndices` for this type. It
-  holds only while the admin question editor keeps deriving `points_value` as the sum of the
+  holds only while this app's `QuestionEditorPage` keeps deriving `points_value` as the sum of the
   positive options.
+- **Roster CSV parsing** — `RosterPage`'s wizard reimplements `roster_service`, and they
+  title-case differently (see [pages/CLAUDE.md](pages/CLAUDE.md)).
 
 ### Auth
 
 - The access token is kept in `localStorage`, read by `lib/api.ts`, written by `LoginPage`,
-  cleared by `HomePage.logout`, and checked by `App`'s `RequireAuth`. There is no auth module and
-  no single owner.
-- `RequireAuth` checks only that a token *exists*. Expiry is never checked, the refresh endpoint
-  is never called, and 401s aren't handled — an expired session renders normally and then fails on
-  use.
+  cleared by `HostShell` (Sign out, or a 401 from `/auth/me`), and checked by `App`'s
+  `RequireAuth`. There is no auth module and no single owner.
+- `RequireAuth` checks only that a token *exists*. For the management pages, `HostShell` then
+  asks the server (`GET /auth/me`): a 401 signs out, and a `GUEST` token gets a notice instead of a
+  page full of 403s (production's shared token makes that a real case). The game routes skip the
+  shell, and the refresh endpoint is never called, so an expired token there still renders and
+  then fails on use.
+- The role from `/auth/me` (`useMe()`) is **display only** and held in memory. Every admin-only
+  control calls an endpoint that enforces `ADMIN` server-side.
 - The OAuth2 temp token arrives in a URL fragment and is exchanged by `LoginPage`, which then
   scrubs the fragment via `history.replaceState`.
 
@@ -117,6 +136,7 @@ Three pieces of logic exist in both this app and the backend and must be changed
 
 - The dark background is set on `body` in `index.css`, and every component assumes a dark slate
   palette with hardcoded Tailwind colors. There is no theme token layer and no light mode.
-- This app targets a projector: type scales are large (`text-8xl` room codes, `text-4xl` prompts)
-  and layouts assume a wide landscape viewport. Don't optimise these screens for mobile — the
-  player app is the mobile client.
+- The game screens target a projector: type scales are large (`text-8xl` room codes, `text-4xl`
+  prompts) and layouts assume a wide landscape viewport. Don't optimise them for mobile — the
+  player app is the mobile client. The shell and management pages use the admin app's dense,
+  desktop sizing (224px sidebar), not projector scale.

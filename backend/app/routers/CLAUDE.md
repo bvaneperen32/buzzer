@@ -2,9 +2,10 @@
 
 ## Purpose
 
-The HTTP API. Four `APIRouter`s, all mounted under `/api` by [main.py](../main.py). These handle
-authentication, authoring/administration, host-side room management, and health — everything
-*except* live gameplay, which goes over [websocket/](../websocket/CLAUDE.md).
+The HTTP API. Five `APIRouter`s, all mounted under `/api` by [main.py](../main.py). These handle
+authentication, administration, host-side management (games, questions, rosters, session
+downloads), room setup, and health — everything *except* live gameplay, which goes over
+[websocket/](../websocket/CLAUDE.md).
 
 ## Contents
 
@@ -12,13 +13,29 @@ authentication, authoring/administration, host-side room management, and health 
   returns active room and player counts. Unauthenticated.
 - `auth.py` — `/api/auth/*`: `login` (username+password, plus a development-only `netid`
   fallback), `oauth2-callback` (consumes Traefik/oauth2-proxy's `X-Auth-Request-*` headers),
-  `exchange-temp`, `guest`, refresh, and logout. Owns the refresh-token cookie helpers.
-- `game.py` — `/api/game/*`: the host's pre- and post-game surface. Resource discovery
-  (`my-courses`, `my-games`, `my-active-sessions`), room create/info/ping, session delete, guest
-  listing and merging, and CSV export.
-- `admin.py` — `/api/admin/*`, ~960 lines, every endpoint behind `require_admin`. CRUD for
-  courses, rosters, games, questions, and users; access grants; game JSON import/export; session
-  listing; and score/report downloads.
+  `exchange-temp`, `guest`, refresh, logout, and `me` (the freshly loaded current user, so the
+  frontends can show role-appropriate UI — display only). Owns the refresh-token cookie helpers.
+  `guest` refuses a room with `allow_guests` off (403, `game_service.GUESTS_NOT_ALLOWED`)
+  *before* creating the guest user.
+- `game.py` — `/api/game/*`: the host's pre- and post-game surface. Resource discovery, room
+  create/info/ping, session delete, guest listing and merging, and CSV export. `my-courses` lists
+  only courses the user HOSTs (every course for admins); `my-games` only games with a game grant
+  on a course they HOST (every game, unassigned included, for admins); `my-active-sessions` only
+  rooms the socket would let them rejoin as HOST. Room create takes `allow_guests`. Session delete
+  and the raw CSV export go through `game_service`'s session-host check.
+- `admin.py` — `/api/admin/*`, ~760 lines, every endpoint behind `require_admin`. CRUD for
+  courses, users, and access grants; guest merge; session listing; any-status score/report
+  downloads. Its game, question, and roster endpoints are thin wrappers over
+  `game_management_service` and `roster_service`, which `host.py` shares. It owns the grant side
+  effects: revoking a HOST row, or downgrading one to PLAYER, calls
+  `revoke_game_grants_for_course`; `PUT /games/{id}` with a new `course_id` revokes grants held by
+  users who don't HOST the new course; `POST /users/{id}/game-access` returns 409 unless the game
+  has a course and the user HOSTs it.
+- `host.py` — `/api/host/*`: host management for the courses a user HOSTs. Game
+  create/import/edit/export, question CRUD and reorder, roster list/import/patch, and the session
+  list with COMPLETED-session report and CSV downloads. Every endpoint is `require_user` plus a
+  `game_service` course, game, or download assertion; those let `ADMIN` through, so admins do host
+  work here too. There is deliberately no game delete (405) — that stays admin-only.
 
 ## How it fits in
 
@@ -26,11 +43,16 @@ The thin edge of the backend. A handler should authenticate via a `common.depend
 validate through a `schemas` model, delegate to a `services` function, and return. Business logic
 that shows up here — scoring rules, lifecycle transitions — belongs in a service instead.
 
-Three guard levels are in use: `require_admin` (all of `admin.py`), `require_user` (host actions
-in `game.py`; excludes guests), and `get_current_user` (any authenticated user, including
-guests). Outside `auth.py` (whose login, OAuth2, guest, refresh, and logout endpoints are
-necessarily open), two endpoints have no guard at all: `GET /api/health` and
-`GET /api/game/rooms/{room_code}/ping`.
+Three guard levels are in use: `require_admin` (all of `admin.py`), `require_user` (all of
+`host.py` and the host actions in `game.py`; excludes guests), and `get_current_user` (any
+authenticated user, including guests — e.g. `/auth/me`). Outside `auth.py` (whose login, OAuth2,
+guest, refresh, and logout endpoints are necessarily open), two endpoints have no guard at all:
+`GET /api/health` and `GET /api/game/rooms/{room_code}/ping`.
+
+Per-resource access sits on top of the guard, in `game_service` assertions that check `ADMIN`
+first (course rule, game rule, download rule, session delete — see
+[services/CLAUDE.md](../services/CLAUDE.md)). **`admin.py` is never loosened for hosts**: host work
+gets its own endpoints in `host.py`, and both call the same service functions.
 
 ## Gotchas
 
@@ -51,9 +73,10 @@ necessarily open), two endpoints have no guard at all: `GET /api/health` and
   real-looking account — while the host one returns 404. The admin one also strips whitespace from
   the netid; the host one only lowercases. Either can leave duplicate score rows if the real user
   also played the same session (see [models/CLAUDE.md](../models/CLAUDE.md)).
-- **`DELETE /api/admin/games/{gid}/questions/{qid}` 500s for any answered question.** Unlike game
-  and user delete, it doesn't pre-delete score rows, and `session_scores.question_id` is NOT NULL
-  with no cascade, so SQLAlchemy's attempt to null the FK is rejected by MySQL.
+- **Deleting an answered question is refused with a 409** on both routers ("This question has
+  been answered in N session(s)… edit it instead, or export the game and import a copy.").
+  `session_scores.question_id` is NOT NULL with no cascade, so this used to 500; the fix
+  deliberately doesn't delete the scores, which would rewrite past results.
 
 ### Validation and typing
 
@@ -62,12 +85,31 @@ necessarily open), two endpoints have no guard at all: `GET /api/health` and
   OpenAPI documentation of their shape. They hand-roll presence checks and raise `ConflictError`
   (409) for what is really a validation failure (422). They're the only un-schema'd request
   bodies in the package.
-- `PUT /api/admin/games/{gid}/questions/{qid}` does not re-run structural validation — see
-  [schemas/CLAUDE.md](../schemas/CLAUDE.md). `POST /api/admin/games/import` *does* (it constructs
-  a real `QuestionCreate` per question), so the import path is stricter than the edit path.
-- **Question prompts are bleach-sanitized on write** (`_PROMPT_TAGS = ["b", "i", "br", "u"]`) in
-  create, update, and import. This is load-bearing: `report_service` renders prompts as raw HTML.
-  Any new write path for questions must bleach too.
+- **Question `PUT` (both routers) validates the merged result**: the service overlays the sent
+  non-null fields on the stored question and builds a `QuestionCreate` from it, so an edit can't
+  leave a question in a state `POST` would reject. Failure is a 422 `UNPROCESSABLE` whose
+  `message` joins each error's `msg` with `"; "`. An explicit `null` means "leave unchanged".
+  Import failures raise the same `UnprocessableError`, so their body is `{"error", "message"}`,
+  not the old `{"detail"}`.
+- **Question prompts are bleach-sanitized on write** in exactly one place,
+  `game_management_service.sanitize_prompt` (tags `b`, `i`, `br`, `u`), which create, update, and
+  import all use. This is load-bearing: `report_service` renders prompts as raw HTML. Any new
+  write path for questions must go through that service.
+
+### Host router and access specifics
+
+- **Route order in `host.py` matters**: `POST /games/import` is declared before the
+  `/games/{game_id}` routes so "import" is never parsed as an id.
+- **Only admins move a game between courses.** The host `PUT /games/{id}` takes `GameUpdate`
+  (`extra="forbid"`), so a `course_id` there is a 422; the admin `PUT` takes `AdminGameUpdate`,
+  which can set or change a course but never clear it.
+- `POST /api/host/games/import` checks course access *before* reading the uploaded file.
+- **Downloads through `host.py` and `game.py` require a COMPLETED session for every role**,
+  admins included. A non-owner gets the 403 first, so the status isn't revealed to them. The admin
+  router's own `/sessions/{id}/export` and `/report` stay any-status: they're the only way to fetch
+  an ABANDONED session's partial results.
+- The host CSV export defaults to `format=canvas`, as the admin one does. The legacy
+  `GET /api/game/sessions/{id}/export` stays raw CSV; no frontend calls it.
 
 ### Health endpoint
 
@@ -104,14 +146,23 @@ necessarily open), two endpoints have no guard at all: `GET /api/health` and
 ### Consistency and performance
 
 - **Commit discipline is mixed.** Some handlers call `await db.commit()` explicitly
-  (`create_course`, `import_game`, `delete_session`); others rely on `get_db`'s commit-on-exit
-  (`update_course`, `update_question`, `delete_user`, `delete_game`). Both work — know which
-  you're in before adding code after a write. `create_course` does `flush` → `refresh` → `commit`,
-  which is one step more than it needs.
+  (`create_course`, the game create/import and question create handlers on both routers,
+  roster import, `delete_session`); others rely on `get_db`'s commit-on-exit (`update_course`,
+  game and question update/delete/reorder, `delete_user`, `delete_game`, the grant endpoints).
+  Both work — know which you're in before adding code after a write. `create_course` does
+  `flush` → `refresh` → `commit`, which is one step more than it needs.
+- **Commit-on-exit lands after the response is sent.** FastAPI 0.141 runs a `yield`
+  dependency's cleanup after responding, so for the second group above the client has its 2xx
+  before `get_db` commits. A write followed immediately by a read can see the old state — which
+  is exactly the frontends' "save, then reload" pattern (e.g. revoking HOST, then reloading the
+  user, can briefly still list the removed game grants). `test_t4_access.py` polls for writes to
+  become visible (`wait_until`). Kept deliberately. *Noted, not scheduled.*
 - Many modules import `ForbiddenError`, `ConflictError`, and SQLAlchemy helpers *inside* function
   bodies rather than at the top. It's inconsistent with the top-level imports in the same files;
   there's no import cycle forcing it here.
-- N+1 queries in several list endpoints: `my_active_sessions` fetches the game and course per
-  session, and `get_room` loads every `Question` row just to `len()` them instead of issuing a
-  `COUNT`. The worst is `admin.py`'s `list_sessions`: four queries per session (game, course,
-  host, player count) over an unpaginated list of every session ever played.
+- N+1 queries in several list endpoints: `my_active_sessions` runs `user_can_host_session` and
+  fetches the game and course per session, and `get_room` loads every `Question` row just to
+  `len()` them instead of issuing a `COUNT`. The worst is `admin.py`'s `list_sessions`: four
+  queries per session (game, course, host, player count) over an unpaginated list of every
+  session ever played. The host twin, `GET /api/host/sessions`, avoids that via
+  `game_service.list_sessions_for` (joins plus one grouped count).

@@ -20,7 +20,8 @@ All files are under `ui/`:
 
 ## How it fits in
 
-The three primitives are generic and used by `LoginPage`, `HomePage`, and the game pages.
+The three primitives are generic and used by every page — the game screens and the management
+pages alike.
 `TimerBar` is game-specific but purely presentational — it receives seconds and a paused flag and
 owns no game state. All styling is Tailwind; there is no CSS module or styled-component here.
 
@@ -43,6 +44,14 @@ navigate. Anything needing game state belongs in [pages/](../pages/CLAUDE.md).
   static bar with no countdown at all.
 - `Button` builds its classes with chained `&&` conditionals rather than a variants library. It's
   fine at this size, but a fifth variant is the point to reach for `cva` instead.
+- `Button` renders a native `<button>` with no `type` default, so **a `Button` inside a `<form>`
+  defaults to `type="submit"`**. The management pages' create and edit forms rely on this for
+  their submit buttons and pass `type="button"` explicitly on Cancel. Omitting it on a new Cancel
+  button will submit the form.
+- `Button`, `Card`, and `Input` are byte-identical to the admin app's copies — a fix here needs
+  the same fix in `frontend/admin/src/components/ui/`.
+- `<select>`, `<textarea>`, and checkbox styling is repeated inline in the management pages (the
+  same long class string at each site); there's no primitive for them.
 - There is no `components/index.ts` barrel; pages import each component by its full path.
 - The `ui/` nesting is the only level of structure here — if game-specific components multiply,
   they'd be better in a sibling folder than mixed into `ui/`.

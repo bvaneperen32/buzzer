@@ -140,10 +140,21 @@ question. The invariant that actually holds is "nothing answer-revealing before
 - **Any `ADMIN` can join any session as HOST**, regardless of `host_user_id`, in both
   `JOIN_ROOM` and `REJOIN_ROOM`. Intentional as an override, but it means two hosts can drive one
   game and there is no "someone else is hosting" guard.
-- **`REJOIN_ROOM` is not used by any client** (see "Room and state model"). It infers role from
-  `host_user_id`. `JOIN_ROOM` — the path clients actually use — takes `role` from the client, but
-  still requires `host_user_id` or `ADMIN` before granting `HOST`, so it's safe; don't loosen that
-  check.
+- **Being seated as `HOST` requires `game_service.user_can_host_session`**: `ADMIN`, or the
+  session's recorded host (`host_user_id`) who *still* holds HOST on the session's course.
+  `JOIN_ROOM` — the path clients actually use — takes `role` from the client and applies that
+  check before granting `HOST`. A recorded host who has lost HOST gets `ERROR` "You no longer have
+  HOST access to this course"; anyone else asking for HOST keeps "Not authorised as host for this
+  session". Don't loosen it back to a bare `host_user_id` test.
+- **`REJOIN_ROOM` is not used by any client** (see "Room and state model"), but it infers the role
+  with the same predicate so it can't become the bypass. A recorded host who fails it gets the
+  same "no longer have HOST access" error and is refused, not seated as a player.
+- **The HOST check runs only at join.** A host whose HOST is revoked mid-game keeps driving it on
+  their current socket; their next reconnect is refused, and the existing 5-minute abandon timer
+  then ends the game. Forcing an immediate disconnect would need gateway bookkeeping that doesn't
+  exist.
+- `authorise_player` (the player path) refuses a `GUEST` when the session has `allow_guests` off —
+  the backstop for a guest whose still-valid token skips `/auth/guest`.
 
 ### Host disconnect and reconnect
 

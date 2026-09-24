@@ -9,17 +9,34 @@ out.
 ## Contents
 
 - `auth.py` — `LoginRequest` (username+password, or dev-only `netid`; a `model_validator`
-  requires one of the two), `TokenResponse` / `RefreshResponse` / `TempTokenResponse`, and
-  `GuestJoinRequest` (display name, email, 6-char room code).
+  requires one of the two), `TokenResponse` / `RefreshResponse` / `TempTokenResponse`,
+  `GuestJoinRequest` (display name, email, 6-char room code), and `MeResponse` (`id`, `username`,
+  `netid`, `display_name`, `role` — what `GET /api/auth/me` returns).
 - `game.py` — the play-side contract: room create/info responses, host's course/game list items,
-  and `ScoreResult` (an internal value object returned by scoring, not an HTTP response). It also
+  and `ScoreResult` (an internal value object returned by scoring, not an HTTP response).
+  `RoomCreateRequest.allow_guests` defaults to true, so older callers still validate under
+  `extra="forbid"`. `MyCourseItem` carries `semester` (courses are name + semester, so same-name
+  courses are expected). `MyGameItem` carries everything the host Games page renders and
+  pre-fills, plus `course_id` / `course_name` / `course_semester`, which default to null for an
+  unassigned game (only admins are ever sent one). It also
   defines `QuestionPublic`, a question view without `answer_data` or `grading_type` — but
   **nothing uses it**. Live question payloads are hand-built dicts in `websocket/gateway.py`
   (`_question_payload`), which do send `gradingType`. Don't count `QuestionPublic` as a safeguard.
 - `admin.py` — the authoring contract, by far the largest file: courses, roster
   import/patch, games, questions, local user accounts, access grants, and the admin session
   list. `QuestionCreate.validate_structure` is where the per-question-type JSON shape is actually
-  enforced.
+  enforced. The game schemas are layered so a course can't sneak in where it doesn't belong:
+  - `GameCreate` validates the `game` section of import bundles as well as requests, so it has
+    **no** `course_id` and must not gain one (it's `extra="forbid"`, and course ids are
+    database-specific while bundles are portable).
+  - `GameCreateRequest(GameCreate)` adds the required `course_id`; it's the create body on both
+    routers.
+  - `GameUpdate` (`extra="forbid"`) is the host update body, so a `course_id` there is a 422.
+  - `AdminGameUpdate(GameUpdate)` adds an optional `course_id`, which can be set or changed but
+    never cleared.
+  - `GameResponse` includes `course_id` (null means unassigned).
+
+  `AdminSessionItem` is also the item type of `GET /api/host/sessions`.
 
 ## How it fits in
 
@@ -34,12 +51,11 @@ by hand (see [websocket/CLAUDE.md](../websocket/CLAUDE.md)).
 
 ## Gotchas
 
-- **`QuestionUpdate` does not re-run `QuestionCreate`'s structural validation.** It only applies
-  per-field constraints, and [routers/admin.py](../routers/admin.py) assigns each present field
-  straight through. A `PUT` can therefore leave a question in a state `POST` would have
-  rejected — e.g. switching `type` to `multi_select` with no `config.options`, or shrinking
-  `options` without shrinking `answer_points`. Downstream scoring in
-  [services/game_service.py](../services/CLAUDE.md) has to tolerate that.
+- **`QuestionUpdate` itself only applies per-field constraints** — the structural check lives in
+  the service. `game_management_service.update_question` overlays the sent fields on the stored
+  question and validates the result with `QuestionCreate` (see
+  [services/CLAUDE.md](../services/CLAUDE.md)). Anything that writes a question without going
+  through that service skips the check.
 - **The question-type allowlist lives here and nowhere else.** The regex in `QuestionCreate` /
   `QuestionUpdate` is the only enforcement of `multiple_choice | true_false |
   fill_in_the_blank | multi_select`; the DB column is a plain string. Adding a question type means

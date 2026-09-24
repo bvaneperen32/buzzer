@@ -87,12 +87,11 @@ This app shares no code with `host` or `admin`, and the copies have already drif
 matter:
 
 - `TimerBar` here has no `initialSeconds` prop; the host's does.
-- `api.ts` here has no `delete`; the host's does.
-- `isTokenExpired` exists only here — the host app never checks expiry at all.
+- `api.ts` here has only `get` / `post`; the host's and admin's have every verb, uploads, and
+  downloads. All three now share the same error-message helper (server `message`, then `detail`).
+- `isTokenExpired` exists only here. The host app never checks expiry locally; it asks the server
+  (`/auth/me`) when entering its management shell.
 - `Button` / `Card` / `Input` are the same API with touch-scaled sizing.
-
-The one bug they *do* share is `api.ts` reading `err.detail` when the backend sends
-`{error, message}`, which discards every server error message.
 
 ### Mobile constraints
 

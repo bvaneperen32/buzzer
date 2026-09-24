@@ -2,9 +2,10 @@
 
 ## Purpose
 
-The Admin console — one of the three frontend apps. It's the authoring and administration
-surface: courses and rosters, user accounts and access grants, games and questions, guest
-reconciliation, and session exports to Canvas. It never participates in a live game.
+The Admin console — one of the three frontend apps. It's the administration surface: user
+accounts and their course and game access grants, courses, and guest reconciliation. Host work
+(games and questions, rosters, session exports to Canvas) moved to the host app, which admins
+reach from this app's "Host tools" links. It never participates in a live game.
 
 ## Contents
 
@@ -25,13 +26,13 @@ reconciliation, and session exports to Canvas. It never participates in a live g
 
 One of three sibling apps under `frontend/` (`host` :5173, `player` :5174, `admin` :5175), built
 independently and served under their own path prefixes. They share no code — `Button`, `Card`,
-`Input`, `cn`, and `api.ts` are duplicated per app. This app's copies are byte-identical to the
-host's except for `api.ts`, which adds `put`, `patch`, `postForm`, and `download`.
+`Input`, `cn`, and `api.ts` are duplicated per app. This app's `Button`, `Card`, `Input`, and
+`cn` are byte-identical to the host's, and its `api.ts` matches the host's in behavior.
 
-This app produces what the other two consume: the games and questions authored here are what a
-host runs and a player answers, and the rosters imported here are what `authorise_player` checks
-at join time. It is also the only app that talks to `/api/admin/*`, all of which requires an
-`ADMIN` role.
+This app decides who can do what in the other two: the HOST/PLAYER course grants and game grants
+set here are what the host app's pages and `authorise_player` check. It is the main client of
+`/api/admin/*`, all of which requires an `ADMIN` role. (The host app also calls two admin
+endpoints — move and delete a game — and shows those controls only to admins.)
 
 ## Running it
 
@@ -60,11 +61,12 @@ populated console.
   trap is worse: **Vite and Tailwind both load the `.js` before the `.ts`**, so an edit to
   `vite.config.ts` or `tailwind.config.ts` has no effect under `npm run dev` until
   `npm run build` regenerates the `.js` (then restart the dev server).
-- **This app has the weakest access guard and the most dangerous operations.** `RequireAdmin`
-  checks only that a token string exists — not its validity or the user's role — while the pages
-  behind it can delete a game along with every session and score ever recorded from it. The
-  backend enforces the role properly; the UI just doesn't reflect it.
-- No tests, no lint config, no CI hook — `tsc -b` at build time is the only automated check. That
-  matters more here than in the sibling apps, because `QuestionEditorPage` encodes scoring
-  invariants that nothing verifies.
+- **`RequireAdmin` checks the role with the server** (`GET /api/auth/me`) and shows non-admins a
+  notice linking to the host app. That's display only — the backend's `require_admin` on every
+  endpoint is the real guard. See [src/CLAUDE.md](src/CLAUDE.md).
+- **Cross-app links differ between dev and production.** `lib/hostApp.ts` points at `/host` in a
+  production build (same origin, same token) and at `http://localhost:5173` in dev (separate
+  origin and token, so you sign in again). `VITE_HOST_APP_URL` overrides both. Verify end-to-end
+  link behavior under nginx (`:8080`).
+- No tests, no lint config, no CI hook — `tsc -b` at build time is the only automated check.
 - Desktop-only by design: fixed sidebar, wide content area, no responsive breakpoints.
