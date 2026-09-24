@@ -1,5 +1,38 @@
 const BASE = '/api';
 
+/** A non-2xx response. `status` lets callers tell a 401 from other failures. */
+export class ApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+/**
+ * Build an ApiError from a failed response. The backend sends three shapes:
+ * `{error, message}` (BuzzerError), `{detail: string}` (HTTPException), and
+ * `{detail: [{msg, ...}]}` (request validation).
+ */
+async function toApiError(res: Response): Promise<ApiError> {
+  const body: unknown = await res.json().catch(() => null);
+  const err = (body && typeof body === 'object' ? body : {}) as { message?: unknown; detail?: unknown };
+  let message = `HTTP ${res.status}`;
+  if (typeof err.message === 'string') {
+    message = err.message;
+  } else if (typeof err.detail === 'string') {
+    message = err.detail;
+  } else if (Array.isArray(err.detail)) {
+    const msgs = err.detail
+      .map((d) => (d && typeof d === 'object' ? (d as { msg?: unknown }).msg : undefined))
+      .filter((m): m is string => typeof m === 'string');
+    if (msgs.length) message = msgs.join('; ');
+  }
+  return new ApiError(res.status, message);
+}
+
 async function apiFetch<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem('token');
   const res = await fetch(`${BASE}${path}`, {
@@ -10,10 +43,7 @@ async function apiFetch<T>(path: string, opts: RequestInit = {}): Promise<T> {
       ...(opts.headers as Record<string, string> ?? {}),
     },
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { detail?: string }).detail ?? `HTTP ${res.status}`);
-  }
+  if (!res.ok) throw await toApiError(res);
   const text = await res.text();
   return text ? (JSON.parse(text) as T) : ({} as T);
 }
@@ -24,10 +54,7 @@ async function downloadFetch(path: string): Promise<void> {
   const res = await fetch(`${BASE}${path}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { detail?: string }).detail ?? `HTTP ${res.status}`);
-  }
+  if (!res.ok) throw await toApiError(res);
   const disposition = res.headers.get('Content-Disposition') ?? '';
   const match = disposition.match(/filename="([^"]+)"/);
   const filename = match ? match[1] : 'download';
@@ -66,10 +93,7 @@ export const api = {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: form,
     }).then(async (res) => {
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error((err as { detail?: string }).detail ?? `HTTP ${res.status}`);
-      }
+      if (!res.ok) throw await toApiError(res);
       const text = await res.text();
       return (text ? JSON.parse(text) : {}) as T;
     });

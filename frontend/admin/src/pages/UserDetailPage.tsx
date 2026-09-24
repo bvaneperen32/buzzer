@@ -20,7 +20,7 @@ interface UserDetail {
   game_access: number[];
 }
 interface Course { id: number; name: string; semester: string }
-interface Game { id: number; title: string }
+interface Game { id: number; title: string; course_id: number | null }
 
 interface CourseSelection { id: number; role: 'HOST' | 'PLAYER'; checked: boolean }
 interface GameSelection { id: number; checked: boolean }
@@ -86,7 +86,9 @@ export default function UserDetailPage() {
     }
   }
 
-  async function revokeCourseAccess(courseId: number) {
+  async function revokeCourseAccess(courseId: number, role: string) {
+    // The server also removes the user's grants on the course's games when a HOST row goes.
+    if (role === 'HOST' && !confirm("This also removes the user's access to this course's games.")) return;
     try {
       await api.delete(`/admin/users/${userId}/course-access/${courseId}`);
       await load();
@@ -175,7 +177,14 @@ export default function UserDetailPage() {
   const grantedCourseIds = new Set(user.course_access.map((ca) => ca.course_id));
   const grantedGameIds = new Set(user.game_access);
   const availableCourses = courses.filter((c) => !grantedCourseIds.has(c.id));
-  const availableGames = games.filter((g) => !grantedGameIds.has(g.id));
+  // A game can be granted only within a course the user HOSTs (the server returns 409 otherwise),
+  // so unassigned games and games of other courses are never offered.
+  const hostCourseIds = new Set(
+    user.course_access.filter((ca) => ca.role === 'HOST').map((ca) => ca.course_id),
+  );
+  const availableGames = games.filter(
+    (g) => g.course_id !== null && hostCourseIds.has(g.course_id) && !grantedGameIds.has(g.id),
+  );
 
   const selectedCourseCount = courseSelections.filter((s) => s.checked).length;
   const selectedGameCount = gameSelections.filter((s) => s.checked).length;
@@ -313,10 +322,10 @@ export default function UserDetailPage() {
             return (
               <div key={ca.course_id} className="flex items-center justify-between">
                 <span className="text-slate-200 text-sm">
-                  {course ? `${course.name} \u2014 ${course.semester}` : `Course ${ca.course_id}`}
+                  {course ? `${course.name} (${course.semester})` : `Course ${ca.course_id}`}
                   <span className="ml-2 text-xs text-slate-400">{ca.role}</span>
                 </span>
-                <Button variant="ghost" size="sm" onClick={() => void revokeCourseAccess(ca.course_id)}>
+                <Button variant="ghost" size="sm" onClick={() => void revokeCourseAccess(ca.course_id, ca.role)}>
                   <Trash2 size={12} />
                 </Button>
               </div>
@@ -352,7 +361,7 @@ export default function UserDetailPage() {
                       }
                     />
                     <span className="flex-1 text-sm text-slate-200">
-                      {course ? `${course.name} \u2014 ${course.semester}` : `Course ${sel.id}`}
+                      {course ? `${course.name} (${course.semester})` : `Course ${sel.id}`}
                     </span>
                     <div className="flex rounded overflow-hidden border border-slate-600 text-xs">
                       <button
@@ -387,7 +396,11 @@ export default function UserDetailPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <h3 className="font-semibold text-slate-100">Game Access</h3>
-            {availableGames.length > 0 && !showGamePanel && (
+            {hostCourseIds.size === 0 ? (
+              <p className="text-slate-500 text-xs text-right max-w-xs">
+                Grant HOST on a course first — games can only be granted within courses the user hosts.
+              </p>
+            ) : availableGames.length > 0 && !showGamePanel && (
               <Button size="sm" variant="outline" onClick={() => openGamePanel(availableGames)}>
                 Add Games
               </Button>
@@ -425,6 +438,7 @@ export default function UserDetailPage() {
               </div>
               {gameSelections.map((sel, i) => {
                 const game = gameMap[sel.id];
+                const course = game && game.course_id !== null ? courseMap[game.course_id] : undefined;
                 return (
                   <div key={sel.id} className="flex items-center gap-2">
                     <input
@@ -437,7 +451,10 @@ export default function UserDetailPage() {
                         )
                       }
                     />
-                    <span className="text-sm text-slate-200">{game ? game.title : `Game ${sel.id}`}</span>
+                    <span className="text-sm text-slate-200">
+                      {game ? game.title : `Game ${sel.id}`}
+                      {course && ` (${course.name}, ${course.semester})`}
+                    </span>
                   </div>
                 );
               })}
