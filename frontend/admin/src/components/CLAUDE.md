@@ -17,8 +17,8 @@ admin has no equivalent of `TimerBar` because nothing here is real-time.
 Every admin page is built from these three plus raw elements. Note what *isn't* here: the app
 uses bare `<select>`, `<textarea>`, and `<input type="checkbox">` inline in pages, with the
 Tailwind classes copy-pasted at each site — there is no `Select`, `Textarea`, or `Checkbox`
-primitive. The select styling in `GamesPage`, `QuestionEditorPage`, `RosterPage`, and
-`UserDetailPage` is the same long class string repeated.
+primitive. The same long select class string is repeated in `UserDetailPage` here and across the
+host app's management pages (which moved there from this app).
 
 Icons come from `lucide-react`, imported per page rather than wrapped.
 

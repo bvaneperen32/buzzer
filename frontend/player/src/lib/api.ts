@@ -1,5 +1,24 @@
 const BASE = '/api';
 
+/**
+ * The server's message for a failed response. The backend sends three shapes:
+ * `{error, message}` (BuzzerError), `{detail: string}` (HTTPException), and
+ * `{detail: [{msg, ...}]}` (request validation).
+ */
+async function errorMessage(res: Response): Promise<string> {
+  const body: unknown = await res.json().catch(() => null);
+  const err = (body && typeof body === 'object' ? body : {}) as { message?: unknown; detail?: unknown };
+  if (typeof err.message === 'string') return err.message;
+  if (typeof err.detail === 'string') return err.detail;
+  if (Array.isArray(err.detail)) {
+    const msgs = err.detail
+      .map((d) => (d && typeof d === 'object' ? (d as { msg?: unknown }).msg : undefined))
+      .filter((m): m is string => typeof m === 'string');
+    if (msgs.length) return msgs.join('; ');
+  }
+  return `HTTP ${res.status}`;
+}
+
 async function apiFetch<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem('token');
   const res = await fetch(`${BASE}${path}`, {
@@ -10,10 +29,7 @@ async function apiFetch<T>(path: string, opts: RequestInit = {}): Promise<T> {
       ...(opts.headers as Record<string, string> ?? {}),
     },
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { detail?: string }).detail ?? `HTTP ${res.status}`);
-  }
+  if (!res.ok) throw new Error(await errorMessage(res));
   const text = await res.text();
   return text ? (JSON.parse(text) as T) : ({} as T);
 }

@@ -12,7 +12,7 @@ itself.
 **Application-level modules**
 
 - `main.py` — assembly. Builds the FastAPI app, registers the rate limiter, CORS, and exception
-  handlers, mounts the four routers under `/api`, and runs `bootstrap_admin()` in the lifespan
+  handlers, mounts the five routers under `/api`, and runs `bootstrap_admin()` in the lifespan
   hook. The final `asgi_app` wraps FastAPI *inside* `socketio.ASGIApp` rather than mounting
   socket.io as a sub-app — Starlette's `Mount` strips the path prefix and breaks socket.io's own
   path matching. Don't "clean this up" into a `Mount`.
@@ -20,21 +20,25 @@ itself.
   `is_development` and `is_stress_test_mode` gate a surprising amount of behavior; see below.
   `CORS_ORIGINS` is also socket.io's Origin allowlist.
 - `database.py` — async SQLAlchemy engine, `AsyncSessionLocal`, the declarative `Base`, and the
-  `get_db` dependency (commits on clean exit, rolls back on exception).
+  `get_db` dependency (commits on clean exit, rolls back on exception). Under FastAPI 0.141 that
+  commit runs **after the response has been sent**, so a client that writes and immediately
+  reads can see the old state — see [routers/CLAUDE.md](routers/CLAUDE.md). Kept deliberately;
+  *noted, not scheduled.*
 - `redis_client.py` — a lazily-created module-level `Redis` singleton with `decode_responses=True`
   (so all Redis reads are `str`, never `bytes`).
 
 **Subpackages** — each has its own `CLAUDE.md` with file-level detail and gotchas:
 
-- [`routers/`](routers/CLAUDE.md) — the HTTP API: `health`, `auth`, `game`, `admin`.
+- [`routers/`](routers/CLAUDE.md) — the HTTP API: `health`, `auth`, `game`, `admin`, `host`.
 - [`websocket/`](websocket/CLAUDE.md) — the socket.io gateway, event constants, socket auth.
-- [`services/`](services/CLAUDE.md) — all business logic: auth, game rules, scoring, Redis state,
-  roster import, exports, HTML reports.
+- [`services/`](services/CLAUDE.md) — all business logic: auth, access rules, game/question
+  authoring, game rules, scoring, Redis state, roster import, exports, HTML reports.
 - [`schemas/`](schemas/CLAUDE.md) — Pydantic request/response contracts.
 - [`models/`](models/CLAUDE.md) — SQLAlchemy ORM models.
 - [`common/`](common/CLAUDE.md) — auth dependencies, error hierarchy, logging, rate limiter.
-- `migrations/` — Alembic env and three revisions (`001` initial schema, `002` answer_data on
-  scores, `003` integer → float points). No context file; run `alembic upgrade head` from
+- `migrations/` — Alembic env and four revisions (`001` initial schema, `002` answer_data on
+  scores, `003` integer → float points, `004` course-specific games: nullable `games.course_id`
+  and `game_sessions.allow_guests`). No context file; run `alembic upgrade head` from
   `backend/`. `env.py` reads `DATABASE_URL` from the process environment, not from `settings`.
 
 ## Architecture
@@ -75,9 +79,16 @@ vanished `room:{code}` key ends a live game (see "Redis lifecycle").
   `acceptedAnswers`. `schemas/game.py`'s `QuestionPublic` is **not** a safeguard — nothing uses
   it. New payloads should derive what they need, and nothing answer-revealing may go out in
   `NEW_QUESTION` or `SYNC_STATE`.
-- **Question prompts are bleach-sanitized on write**, in all three admin write paths. This is
-  load-bearing because `report_service` renders prompts as raw HTML. A new write path that skips
-  bleach is a stored-XSS hole in the report.
+- **Question prompts are bleach-sanitized on write**, in one place:
+  `services/game_management_service.sanitize_prompt`, which every create, update, and import path
+  (admin and host) goes through. This is load-bearing because `report_service` renders prompts as
+  raw HTML. A new write path that skips that service is a stored-XSS hole in the report.
+- **Every permission goes through the existing role and grant system**: `users.role`,
+  `user_course_access` HOST/PLAYER rows, `user_game_access` grants, the `common.dependencies`
+  guards, and the `game_service` assertions, which check `ADMIN` first. HOST is a live per-course
+  grant checked on every request; `game_sessions.host_user_id` is a historical record that grants
+  nothing on its own. The frontends' role checks (`GET /api/auth/me`) are display only. See
+  [services/CLAUDE.md](services/CLAUDE.md).
 - **Adding a question type touches about two dozen sites across the backend and all three
   frontend apps** — the full list is in the next section. The existing `multi_select` type missed
   the four `report_service` sites and renders as an empty card there; treat it as the worked
@@ -110,8 +121,9 @@ a plain string, and every client has a silent fallback for an unknown type.
 - player — `types/game.ts`, a `QuestionPage` branch (the answer controls),
   `ResultsPage.describeAnswer`, and `GameOverPage`'s `describePlayerAnswer` /
   `describeCorrectAnswer`.
-- admin — `QuestionEditorPage`: form state, `questionToForm`, `formToPayload` (including the
-  `points_value` derivation), and the list rendering.
+- host — also `QuestionEditorPage` (the authoring form, moved here from admin): form state,
+  `questionToForm`, `formToPayload` (including the `points_value` derivation), and the list
+  rendering.
 
 ## Gotchas
 
@@ -160,10 +172,14 @@ Running more than one uvicorn worker requires addressing all three.
 - **Deletes destroy history.** `game_sessions.game_id` and `session_scores.user_id` are NOT NULL
   with no cascade, so `DELETE /api/admin/games/{id}` and `DELETE /api/admin/users/{id}` explicitly
   delete dependent score rows first. Removing a game erases every session ever played from it.
-- **Deleting an answered question 500s.** `DELETE /api/admin/games/{gid}/questions/{qid}` has no
-  pre-delete step, `Question.scores` has no cascade, and `session_scores.question_id` is NOT NULL
-  — so SQLAlchemy tries to null the FK and MySQL rejects it. A question that has been answered in
-  any session cannot be deleted.
+- **An answered question can't be deleted — by design, with a 409.** `Question.scores` has no
+  cascade and `session_scores.question_id` is NOT NULL, so this used to 500. Now
+  `game_management_service.delete_question` counts the sessions that answered it and refuses,
+  pointing the author at editing or export-and-reimport. Deleting the scores instead would
+  rewrite past results.
+- **Games belong to one course** (`games.course_id`, migration `004`), and only admins can change
+  it. Games that predate `004` are unassigned (NULL): invisible to hosts and unrunnable by anyone
+  until an admin assigns a course, since a room's course must equal its game's.
 - **Nothing in MySQL prevents double-scoring.** `session_scores` has no unique constraint on
   (session, user, question). The only guard is the gateway's Redis `has_answered` check, a
   separate read before `record_answer` writes — not atomic. A double-submit race, or losing the

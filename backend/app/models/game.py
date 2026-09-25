@@ -23,6 +23,10 @@ class Game(Base):
         Text, nullable=False, default="", server_default=sa.text("''")
     )
     max_players: Mapped[int] = mapped_column(Integer, default=150, nullable=False)
+    # NULL = unassigned: games created before migration 004 have no course.
+    course_id: Mapped[int | None] = mapped_column(
+        ForeignKey("courses.id", name="fk_games_course_id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     questions: Mapped[list[Question]] = relationship(

@@ -15,7 +15,9 @@ questions, and reviewing results. Plus `GameLayout`, which owns the socket and a
 - `NamePage.tsx` — identity. Three modes: `guest` (display name + email → `/auth/guest`), `netid`
   (UW SSO, stashing the room code in `sessionStorage` first), and `local`
   (username/password). Pre-fills name and email from `localStorage`, and collapses to a single
-  "Join Game" button when a valid token is already present.
+  "Join Game" button when a valid token is already present. Under that button, **"Use a different
+  account"** removes the token and shows the sign-in modes again (Guest selected, as on a fresh
+  visit).
 - `LoginPage.tsx` — OAuth2 return handler only, not a form. Reads the temp token from the URL
   fragment, exchanges it, recovers `joinRoomCode` from `sessionStorage`, and redirects to
   `/name/{code}`.
@@ -108,8 +110,14 @@ and typed, so it looks like an oversight. Don't "fix" it without checking the in
 
 ### Auth flow
 
-- `NamePage`'s `isAuthenticated` is computed during render, not in state, so it doesn't react to a
-  token changing under it — fine given each mode navigates away on success.
+- `NamePage`'s `isAuthenticated` is state, initialised from the token once at mount, so "Use a
+  different account" can re-render the page after removing the token. It still doesn't notice a
+  token changed by another tab.
+- **A still-valid guest token skips `/auth/guest`** and goes straight to the socket. For a room
+  with guests turned off, `authorise_player` then refuses it with a fatal `error`, and "Back to
+  Join" returns to the same collapsed page. "Use a different account" is the way out to NetID
+  sign-in. It's a plain link rather than special handling of that one error message, which would
+  be brittle.
 - The NetID path depends on `sessionStorage.joinRoomCode` surviving the OAuth2 round trip. If it
   doesn't, `LoginPage` falls back to `/join` and the player re-enters the code.
 - `GameOverPage`'s "Play Again" clears the token outright, signing out NetID and local users as

@@ -39,6 +39,9 @@ logger = structlog.get_logger()
 
 _HOST_GRACE_SECONDS = 300  # 5-minute host-disconnect grace period
 
+# For the session's recorded host after an admin has revoked their HOST grant.
+_HOST_ACCESS_LOST = "You no longer have HOST access to this course"
+
 # ---------------------------------------------------------------------------
 # Server instantiation
 # ---------------------------------------------------------------------------
@@ -494,8 +497,15 @@ async def on_join_room(sid: str, data: dict) -> None:
             return
 
         if role == "HOST":
-            if user.id != session.host_user_id and user.role != "ADMIN":
-                await _emit_error(sid, "Not authorised as host for this session")
+            # host_user_id alone isn't enough: the recorded host must still hold
+            # HOST on the course (ADMIN keeps its override).
+            if not await game_service.user_can_host_session(db, user, session):
+                await _emit_error(
+                    sid,
+                    _HOST_ACCESS_LOST
+                    if user.id == session.host_user_id
+                    else "Not authorised as host for this session",
+                )
                 return
 
             # Cancel any pending abandon grace period
@@ -660,7 +670,7 @@ async def on_rejoin_room(sid: str, data: dict) -> None:
     """
     data = {"room_code": str}
     Re-establishes room membership using the JWT already validated at connect time.
-    Role is inferred from the session (host_user_id comparison).
+    Role is inferred with the session-host check (game_service.user_can_host_session).
     """
     session_data = await sio.get_session(sid)
     user_id: str = session_data.get("user_id", "")
@@ -685,7 +695,12 @@ async def on_rejoin_room(sid: str, data: dict) -> None:
             await _emit_error(sid, str(exc))
             return
 
-        is_host = user.id == session.host_user_id or user.role == "ADMIN"
+        is_host = await game_service.user_can_host_session(db, user, session)
+        if not is_host and user.id == session.host_user_id:
+            # A recorded host who has lost HOST is refused rather than seated as a
+            # player — this path must not become a way around the JOIN_ROOM check.
+            await _emit_error(sid, _HOST_ACCESS_LOST)
+            return
 
         if is_host:
             task = _abandon_tasks.pop(session.id, None)

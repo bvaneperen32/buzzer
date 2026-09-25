@@ -9,7 +9,10 @@ JWT expiry check.
 
 - `api.ts` — `apiFetch<T>` plus `api.get` / `api.post`. Prefixes `/api`, attaches
   `Authorization: Bearer <token>` from `localStorage`, throws on non-2xx, returns `{}` for empty
-  bodies.
+  bodies. The thrown `Error`'s message comes from one helper, `errorMessage`: the server's
+  `message` if it's a string, else a string `detail`, else a 422 `detail` array's `msg`s joined
+  with `"; "`, else `HTTP <status>`. (The host and admin copies use the same helper and add an
+  `ApiError` that carries the status; this app doesn't need the status.)
 - `utils.ts` — `cn(...)` (clsx + tailwind-merge), and **`isTokenExpired(token)`**, which
   base64url-decodes the JWT payload and compares its `exp` claim against the current time.
   Returns `true` for a missing or malformed token.
@@ -28,21 +31,18 @@ failing at connect time.
 
 ## Gotchas
 
-- **The error-message extraction doesn't match the backend's error shape.** `api.ts` reads
-  `err.detail`, but `BuzzerError` responses are `{"error": code, "message": ...}` — there is no
-  `detail` key. Every 401/403/404/409 therefore surfaces as a bare `HTTP <status>` and the
-  server's real message is thrown away. This matters more here than elsewhere: a guest who picks
-  an email already tied to a real account gets a specific, actionable message from the server
-  ("Please sign in instead") that the UI replaces with `HTTP 409`. Only 422 carries `detail`, and
-  there it's an array that stringifies into noise. The identical bug exists in the host and admin
-  copies of this file.
+- **Server messages reach the player now, and they matter here most.** A guest who picks an email
+  already tied to a real account sees the server's actionable "Please sign in instead", and a
+  guest refused by a no-guests room sees "This game isn't open to guests — sign in with your
+  school account", where both used to read `HTTP 409` / `HTTP 403`. `LoginPage`'s hand-rolled
+  `exchange-temp` fetch bypasses the helper and still reads only `detail`.
 - **`isTokenExpired` does not verify the signature** — it only reads the `exp` claim. That's
   correct for a UI hint (the server verifies for real), but don't repurpose it as a security
   check.
 - It also doesn't account for clock skew: a client whose clock runs fast will discard a token the
   server still considers valid.
-- `api` exposes only `get` and `post` — no `delete` or `put` (the host copy has `delete`). The
-  three apps' clients have drifted; they aren't interchangeable.
+- `api` exposes only `get` and `post` — the host and admin copies have every verb plus upload and
+  download helpers. The three apps' clients aren't interchangeable.
 - The token is in `localStorage`, so it survives a tab close. `GameOverPage`'s "Play Again"
   deliberately clears it — which also signs out a NetID user, not just a guest. And because all
   three apps use the key `token` on one origin in production, clearing it (or a guest join

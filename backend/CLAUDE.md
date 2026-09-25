@@ -134,8 +134,15 @@ and a verbose-logging switch.
   compare `is_correct` by exact float equality.
 - **Deletes destroy history.** `game_sessions.game_id` and `session_scores.user_id` are NOT NULL
   with no cascade, so the admin delete endpoints explicitly remove dependent rows first. Removing
-  a game erases every session ever played from it. Question delete has no such step, so deleting
-  any question that has ever been answered fails with a 500.
+  a game erases every session ever played from it. Question delete has no such step, so an
+  answered question is refused with a 409 rather than deleting its scores.
+- **Games belong to one course** since migration `004` (nullable `games.course_id`; only admins
+  can set or change it). Pre-`004` games are unassigned — invisible to hosts and unrunnable until
+  an admin assigns a course. Access to a game needs HOST on its course *and* a game grant; see
+  [app/CLAUDE.md](app/CLAUDE.md).
+- **`get_db` commits after the response is sent** (FastAPI 0.141 runs `yield`-dependency cleanup
+  after responding), so a write followed immediately by a read can see stale data. Kept
+  deliberately; *noted, not scheduled.*
 - **`Question.type` is an unconstrained `String(50)`** — the allowlist lives only in a Pydantic
   regex. Adding a question type touches about two dozen sites across the backend *and all three
   frontend apps*; the canonical checklist is in [app/CLAUDE.md](app/CLAUDE.md). The existing

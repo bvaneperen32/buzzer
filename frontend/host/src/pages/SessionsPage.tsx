@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Download, FileText, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
 import { api } from '../lib/api';
+import { useMe } from '../lib/me';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { Input } from '../components/ui/input';
@@ -11,7 +12,7 @@ interface SessionItem {
   status: string;
   game_id: number;
   game_title: string;
-  course_id: number;
+  course_id: number | null;
   course_name: string;
   course_semester: string;
   host_display_name: string | null;
@@ -48,6 +49,9 @@ function fmtDate(iso: string) {
 }
 
 export default function SessionsPage() {
+  // Display only: the server scopes the list (hosts get only COMPLETED sessions they hosted and
+  // ignore ?status=) and enforces ADMIN on delete.
+  const isAdmin = useMe().role === 'ADMIN';
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -63,8 +67,8 @@ export default function SessionsPage() {
     setError('');
     try {
       const path = status && status !== 'ALL'
-        ? `/admin/sessions?status=${status}`
-        : '/admin/sessions';
+        ? `/host/sessions?status=${status}`
+        : '/host/sessions';
       const data = await api.get<SessionItem[]>(path);
       setSessions(data);
     } catch (err) {
@@ -111,7 +115,7 @@ export default function SessionsPage() {
       } else {
         params.set('per_question', String(opts.perQuestion));
       }
-      await api.download(`/admin/sessions/${session.session_id}/export?${params}`);
+      await api.download(`/host/sessions/${session.session_id}/export?${params}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Export failed');
     } finally {
@@ -123,7 +127,7 @@ export default function SessionsPage() {
     setReportLoading(sessionId);
     setError('');
     try {
-      await api.download(`/admin/sessions/${sessionId}/report`);
+      await api.download(`/host/sessions/${sessionId}/report`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Report download failed');
     } finally {
@@ -147,23 +151,27 @@ export default function SessionsPage() {
   return (
     <div className="p-8 max-w-5xl">
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold text-slate-100">Sessions</h2>
+        <h2 className="text-2xl font-bold text-slate-100">
+          {isAdmin ? 'Sessions' : 'Completed sessions you hosted'}
+        </h2>
         {/* Status filter tabs */}
-        <div className="flex gap-1 bg-slate-800 rounded-lg p-1">
-          {filters.map((f) => (
-            <button
-              key={f}
-              onClick={() => setStatusFilter(f)}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                statusFilter === f
-                  ? 'bg-indigo-600 text-white'
-                  : 'text-slate-400 hover:text-slate-100'
-              }`}
-            >
-              {f === 'ALL' ? 'All' : f === 'IN_PROGRESS' ? 'In Progress' : statusLabel(f)}
-            </button>
-          ))}
-        </div>
+        {isAdmin && (
+          <div className="flex gap-1 bg-slate-800 rounded-lg p-1">
+            {filters.map((f) => (
+              <button
+                key={f}
+                onClick={() => setStatusFilter(f)}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  statusFilter === f
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-slate-400 hover:text-slate-100'
+                }`}
+              >
+                {f === 'ALL' ? 'All' : f === 'IN_PROGRESS' ? 'In Progress' : statusLabel(f)}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {error && <p className="text-red-400 mb-4 text-sm">{error}</p>}
@@ -179,6 +187,8 @@ export default function SessionsPage() {
             const opts = getOpts(s.session_id, s.game_title);
             const isDeleting = confirmDelete === s.session_id;
             const isDownloading = downloading === s.session_id;
+            // Downloads require COMPLETED for every role, admins included (the server's rule).
+            const canDownload = s.status === 'COMPLETED';
 
             return (
               <Card key={s.session_id} className="overflow-hidden">
@@ -192,7 +202,7 @@ export default function SessionsPage() {
                       </span>
                     </div>
                     <p className="text-slate-400 text-sm mt-0.5">
-                      {s.course_name} · {s.course_semester}
+                      {s.course_name} ({s.course_semester})
                       {s.host_display_name && <span className="text-slate-500"> · {s.host_display_name}</span>}
                     </p>
                     <p className="text-slate-500 text-xs mt-0.5">
@@ -203,25 +213,29 @@ export default function SessionsPage() {
                     </p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={reportLoading === s.session_id}
-                      onClick={() => void handleReport(s.session_id)}
-                      title="Download standalone HTML report"
-                    >
-                      <FileText size={13} className="mr-1" />
-                      {reportLoading === s.session_id ? 'Building…' : 'Report'}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setExpandedId(isExpanded ? null : s.session_id)}
-                    >
-                      <Download size={13} className="mr-1" /> Export
-                      {isExpanded ? <ChevronUp size={12} className="ml-1" /> : <ChevronDown size={12} className="ml-1" />}
-                    </Button>
-                    {isDeleting ? (
+                    {canDownload && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={reportLoading === s.session_id}
+                          onClick={() => void handleReport(s.session_id)}
+                          title="Download standalone HTML report"
+                        >
+                          <FileText size={13} className="mr-1" />
+                          {reportLoading === s.session_id ? 'Building…' : 'Report'}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setExpandedId(isExpanded ? null : s.session_id)}
+                        >
+                          <Download size={13} className="mr-1" /> Export
+                          {isExpanded ? <ChevronUp size={12} className="ml-1" /> : <ChevronDown size={12} className="ml-1" />}
+                        </Button>
+                      </>
+                    )}
+                    {isAdmin && (isDeleting ? (
                       <>
                         <span className="text-red-400 text-xs">Delete all data?</span>
                         <Button size="sm" variant="destructive" onClick={() => void handleDelete(s.session_id)}>
@@ -235,12 +249,12 @@ export default function SessionsPage() {
                       <Button size="sm" variant="destructive" onClick={() => setConfirmDelete(s.session_id)}>
                         <Trash2 size={13} />
                       </Button>
-                    )}
+                    ))}
                   </div>
                 </div>
 
                 {/* Export options panel */}
-                {isExpanded && (
+                {isExpanded && canDownload && (
                   <div className="border-t border-slate-700 bg-slate-800/50 px-5 py-4 space-y-4">
                     {/* Format selector */}
                     <div>

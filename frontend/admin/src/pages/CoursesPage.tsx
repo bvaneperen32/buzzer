@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Plus, Users, Pencil } from 'lucide-react';
+import { Plus, Users, Pencil, ExternalLink } from 'lucide-react';
 import { api } from '../lib/api';
+import { hostAppUrl } from '../lib/hostApp';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader } from '../components/ui/card';
 import { Input } from '../components/ui/input';
@@ -25,7 +25,6 @@ export default function CoursesPage() {
   const [editName, setEditName] = useState('');
   const [editSemester, setEditSemester] = useState('');
   const [editSaving, setEditSaving] = useState(false);
-  const navigate = useNavigate();
 
   async function load() {
     try {
@@ -165,13 +164,16 @@ export default function CoursesPage() {
                 >
                   <Pencil size={14} />
                 </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => navigate(`/courses/${c.id}/roster`)}
+                {/* Rosters are managed in the host app; a new tab keeps the console open. */}
+                <a
+                  href={hostAppUrl(`/rosters/${c.id}`)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center justify-center rounded-lg font-semibold transition-colors px-3 py-1.5 text-sm border border-slate-600 text-slate-200 hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900 focus:ring-slate-500"
                 >
                   <Users size={14} className="mr-1" /> Roster
-                </Button>
+                  <ExternalLink size={12} className="ml-1" />
+                </a>
               </div>
             </Card>
           ))}

@@ -7,12 +7,12 @@ from datetime import datetime, timezone
 import structlog
 from rapidfuzz.distance import Levenshtein
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..common.exceptions import ConflictError, ForbiddenError, NotFoundError
-from ..models.course import CourseRoster, UserCourseAccess
+from ..models.course import Course, CourseRoster, UserCourseAccess
 from ..models.game import Game, Question, UserGameAccess
 from ..models.session import GameSession, SessionScore
 from ..models.user import User
@@ -24,6 +24,9 @@ logger = structlog.get_logger()
 # Character set from spec: unambiguous alphanumeric (no 0/O/1/I/L)
 _ROOM_CHARSET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 _MAX_CODE_ATTEMPTS = 5
+
+# Shared by the guest endpoint (the primary check) and authorise_player (the backstop).
+GUESTS_NOT_ALLOWED = "This game isn't open to guests — sign in with your school account"
 
 
 # ---------------------------------------------------------------------------
@@ -44,45 +47,236 @@ async def generate_room_code(redis: Redis) -> str:
 # ---------------------------------------------------------------------------
 
 
+async def has_host_grant(db: AsyncSession, user_id: str, course_id: int) -> bool:
+    """A HOST grant is a user_course_access row with role HOST; a PLAYER row isn't one."""
+    result = await db.execute(
+        select(UserCourseAccess).where(
+            UserCourseAccess.user_id == user_id,
+            UserCourseAccess.course_id == course_id,
+            UserCourseAccess.role == "HOST",
+        )
+    )
+    return result.scalar_one_or_none() is not None
+
+
 async def assert_host_can_use_course(
     db: AsyncSession, user: User, course_id: int
 ) -> None:
     """Admin can use any course; USER must have HOST role in user_course_access."""
     if user.role == "ADMIN":
-        from ..models.course import Course
-
         course = await db.get(Course, course_id)
         if not course:
             raise NotFoundError(f"Course {course_id} not found")
         return
 
-    result = await db.execute(
-        select(UserCourseAccess).where(
-            UserCourseAccess.user_id == user.id,
-            UserCourseAccess.course_id == course_id,
-            UserCourseAccess.role == "HOST",
-        )
-    )
-    if not result.scalar_one_or_none():
+    if not await has_host_grant(db, user.id, course_id):
         raise ForbiddenError("You do not have HOST access to this course")
 
 
-async def assert_host_can_use_game(db: AsyncSession, user: User, game_id: int) -> None:
-    """Admin can use any game; USER must have an entry in user_game_access."""
+async def assert_host_can_use_game(db: AsyncSession, user: User, game_id: int) -> Game:
+    """
+    The game rule, for running a game and for editing it. Admin can use any game;
+    USER needs HOST on the game's course *and* a user_game_access grant, so an
+    unassigned game (course_id NULL) is off-limits to every non-admin.
+    Non-admins get the same 403 whether or not the game exists.
+    """
+    game = await db.get(Game, game_id)
     if user.role == "ADMIN":
-        game = await db.get(Game, game_id)
         if not game:
             raise NotFoundError(f"Game {game_id} not found")
-        return
+        return game
 
-    result = await db.execute(
+    if not game or game.course_id is None:
+        raise ForbiddenError("You do not have access to this game")
+    grant = await db.execute(
         select(UserGameAccess).where(
             UserGameAccess.user_id == user.id,
             UserGameAccess.game_id == game_id,
         )
     )
-    if not result.scalar_one_or_none():
+    if not grant.scalar_one_or_none() or not await has_host_grant(
+        db, user.id, game.course_id
+    ):
         raise ForbiddenError("You do not have access to this game")
+    return game
+
+
+async def user_can_host_session(
+    db: AsyncSession, user: User, session: GameSession
+) -> bool:
+    """
+    The session-host check behind downloads, session delete, and the socket HOST
+    join. host_user_id is a historical record, not a permission: it counts only
+    alongside a live HOST grant on the session's course.
+    """
+    if user.role == "ADMIN":
+        return True
+    if session.host_user_id != user.id:
+        return False
+    return await has_host_grant(db, user.id, session.course_id)
+
+
+async def assert_can_download_session(
+    db: AsyncSession, user: User, session_id: str
+) -> GameSession:
+    session = await db.get(GameSession, session_id)
+    if not session:
+        raise NotFoundError(f"Session {session_id} not found")
+    # Host check before status, so a non-owner can't learn the session's status.
+    if not await user_can_host_session(db, user, session):
+        raise ForbiddenError("Only the session's host can download it")
+    # Applies to admins too; the admin router's own download endpoints are the
+    # any-status path.
+    if session.status != "COMPLETED":
+        raise ConflictError("Downloads are available once the session has completed")
+    return session
+
+
+async def assert_can_delete_session(
+    db: AsyncSession, user: User, session_id: str
+) -> GameSession:
+    session = await db.get(GameSession, session_id)
+    if not session:
+        raise NotFoundError(f"Session {session_id} not found")
+    if not await user_can_host_session(db, user, session):
+        raise ForbiddenError("Only the session host can delete this session")
+    return session
+
+
+# ---------------------------------------------------------------------------
+# Game-grant side effects — grants never outlive what makes them effective
+# ---------------------------------------------------------------------------
+
+
+async def revoke_game_grants_for_course(
+    db: AsyncSession, user_id: str, course_id: int
+) -> int:
+    """User lost HOST on course_id: drop their grants for that course's games, so a
+    later, unrelated HOST grant can't silently revive them."""
+    result = await db.execute(
+        delete(UserGameAccess).where(
+            UserGameAccess.user_id == user_id,
+            UserGameAccess.game_id.in_(
+                select(Game.id).where(Game.course_id == course_id)
+            ),
+        )
+    )
+    logger.info(
+        "game_grants_revoked_host_lost",
+        user_id=user_id,
+        course_id=course_id,
+        count=result.rowcount,
+    )
+    return result.rowcount
+
+
+async def revoke_game_grants_without_host(
+    db: AsyncSession, game_id: int, course_id: int
+) -> int:
+    """Game moved to course_id: drop grants on it held by users who don't HOST that
+    course. Grants of the new course's hosts stay and remain effective."""
+    hosts = select(UserCourseAccess.user_id).where(
+        UserCourseAccess.course_id == course_id,
+        UserCourseAccess.role == "HOST",
+    )
+    result = await db.execute(
+        delete(UserGameAccess).where(
+            UserGameAccess.game_id == game_id,
+            UserGameAccess.user_id.not_in(hosts),
+        )
+    )
+    logger.info(
+        "game_grants_revoked_game_moved",
+        game_id=game_id,
+        course_id=course_id,
+        count=result.rowcount,
+    )
+    return result.rowcount
+
+
+# ---------------------------------------------------------------------------
+# Session listing
+# ---------------------------------------------------------------------------
+
+
+async def list_sessions_for(
+    db: AsyncSession, user: User, status: str | None
+) -> list[dict]:
+    """
+    AdminSessionItem-shaped rows, newest first. Admin: every session, optionally
+    filtered by status. Anyone else: only COMPLETED sessions they hosted on a
+    course they still HOST (what the download rule lets them fetch); `status`
+    is ignored.
+    """
+    player_counts = (
+        select(
+            SessionScore.session_id,
+            func.count(SessionScore.user_id.distinct()).label("player_count"),
+        )
+        .group_by(SessionScore.session_id)
+        .subquery()
+    )
+    # host_user_id is nullable and a LOBBY session has no scores, so both of
+    # those joins must be outer or such sessions vanish from the list.
+    query = (
+        select(
+            GameSession,
+            Game.title,
+            Course.name,
+            Course.semester,
+            User.display_name,
+            User.username,
+            User.netid,
+            player_counts.c.player_count,
+        )
+        .join(Game, Game.id == GameSession.game_id)
+        .join(Course, Course.id == GameSession.course_id)
+        .outerjoin(User, User.id == GameSession.host_user_id)
+        .outerjoin(player_counts, player_counts.c.session_id == GameSession.id)
+        .order_by(GameSession.created_at.desc())
+    )
+    if user.role == "ADMIN":
+        if status:
+            query = query.where(GameSession.status == status)
+    else:
+        query = query.where(
+            GameSession.host_user_id == user.id,
+            GameSession.status == "COMPLETED",
+            GameSession.course_id.in_(
+                select(UserCourseAccess.course_id).where(
+                    UserCourseAccess.user_id == user.id,
+                    UserCourseAccess.role == "HOST",
+                )
+            ),
+        )
+
+    rows = await db.execute(query)
+    return [
+        {
+            "session_id": s.id,
+            "room_code": s.room_code,
+            "status": s.status,
+            "game_id": s.game_id,
+            "game_title": game_title,
+            "course_id": s.course_id,
+            "course_name": course_name,
+            "course_semester": course_semester,
+            "host_display_name": display_name or username or netid,
+            "created_at": s.created_at,
+            "completed_at": s.completed_at,
+            "player_count": player_count or 0,
+        }
+        for (
+            s,
+            game_title,
+            course_name,
+            course_semester,
+            display_name,
+            username,
+            netid,
+            player_count,
+        ) in rows.all()
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -97,10 +291,14 @@ async def create_room(
     game_id: int,
     course_id: int,
     max_rooms: int = 50,
+    allow_guests: bool = True,
 ) -> GameSession:
     # Validate access
     await assert_host_can_use_course(db, host, course_id)
-    await assert_host_can_use_game(db, host, game_id)
+    game = await assert_host_can_use_game(db, host, game_id)
+    # Applies to admins too — so an unassigned game can't run until it's assigned.
+    if game.course_id != course_id:
+        raise ConflictError("This game belongs to a different course")
 
     # Enforce global room limit — count only LOBBY/IN_PROGRESS rooms.
     # COMPLETED/ABANDONED rooms may linger in Redis briefly for reconnection
@@ -120,7 +318,6 @@ async def create_room(
     if room_count >= max_rooms:
         raise ConflictError(f"Maximum of {max_rooms} concurrent rooms reached")
 
-    await db.get(Game, game_id)
     room_code = await generate_room_code(redis)
 
     session = GameSession(
@@ -130,6 +327,7 @@ async def create_room(
         course_id=course_id,
         host_user_id=host.id,
         status="LOBBY",
+        allow_guests=allow_guests,
     )
     db.add(session)
     await db.flush()
@@ -243,6 +441,9 @@ async def authorise_player(db: AsyncSession, user: User, session: GameSession) -
     Raises ForbiddenError / NotFoundError if not authorised.
     """
     if user.role == "GUEST":
+        # Backstop for guests who skip /auth/guest with a still-valid guest token.
+        if not session.allow_guests:
+            raise ForbiddenError(GUESTS_NOT_ALLOWED)
         return user.display_name or "Guest"
 
     if user.role == "ADMIN":

@@ -204,7 +204,11 @@ def game_setup(docker_stack, base_url: str, admin_token: str, fast_mode: bool):
     # --- Game ---
     r = httpx.post(
         f"{base_url}/api/admin/games",
-        json={"title": f"Test Game {tag}", "description": "Integration test game"},
+        json={
+            "title": f"Test Game {tag}",
+            "description": "Integration test game",
+            "course_id": course_id,
+        },
         headers=headers,
         timeout=10.0,
     )

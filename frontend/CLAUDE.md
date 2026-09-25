@@ -9,9 +9,9 @@ entire client surface of Buzzer; there is no server-rendered UI.
 
 | App | Audience | Dev port | Served at | Transport |
 |---|---|---|---|---|
-| [`host/`](host/CLAUDE.md) | Presenter, projected | 5173 | `/host/` | socket-first |
+| [`host/`](host/CLAUDE.md) | Presenter: projected game + authoring, rosters, results | 5173 | `/host/` | socket (game) + REST (management) |
 | [`player/`](player/CLAUDE.md) | Participants, phones | 5174 | `/player/` | socket-first |
-| [`admin/`](admin/CLAUDE.md) | Staff authoring & admin | 5175 | `/admin/` | REST-only |
+| [`admin/`](admin/CLAUDE.md) | Admins: users, courses, access grants | 5175 | `/admin/` | REST-only |
 
 Each is a complete, self-contained Vite project with its own `package.json`, `node_modules`,
 Tailwind config, and `tsconfig`. Each has the same internal shape:
@@ -40,8 +40,13 @@ every app sets `base` to its prefix in production and `/` in dev, and passes
 answer distribution; the player renders only controls. Neither is complete alone, and a change to
 the game's shape usually touches both.
 
-**Admin is upstream of the other two.** Games and questions authored there are what a host runs;
-rosters imported there are what gates a player's join.
+**The host app is also where content is made.** Games and questions authored in its management
+pages are what it runs, and the rosters imported there gate a player's join. Hosts do this for the
+courses they HOST; admins use the same pages.
+
+**Admin is upstream of both, through access.** The HOST/PLAYER course grants and game grants set
+there decide what a host can see and run. Admin's "Host tools" sidebar links (and its per-course
+roster buttons) open the host app in a new tab rather than duplicating its pages.
 
 ## Running them
 
@@ -75,8 +80,11 @@ The `config.py` default omits `:5174`, so the player socket works in dev only if
   use the same key, `token`, and in production they share one origin** (nginx serves `/host/`,
   `/player/`, and `/admin/` from `:8080`) — so one browser holds one token for all three. Signing
   in anywhere signs every app in that browser in as that user: the player's "Play Again" signs the
-  host out, and a guest joining from the host's machine replaces the host's token with a guest's
-  (→ 403s). Dev hides this, because each Vite port is a separate origin.
+  host out, and a guest joining from the host's machine replaces the host's token with a guest's.
+  The host app's shell and the admin console check `GET /api/auth/me` and show a notice (guest, or
+  not an administrator) instead of a page full of 403s; the role is display only and never
+  stored. Dev hides all of this, because each Vite port is a separate origin — which is also why
+  admin's links into the host app arrive signed in only under nginx.
 - **One socket, owned by `GameLayout`.** In host and player, a single `GameLayout` component opens
   the connection, maps every event to state, and exposes it through a React context. Child pages
   are views. No Redux, Zustand, or query library anywhere.
@@ -101,28 +109,29 @@ they have already drifted:
   16px inputs to stop iOS zoom).
 - `TimerBar` differs in its actual **prop interface** — host's takes `initialSeconds`, player's
   doesn't.
-- `api.ts` differs in **which verbs exist** — player has `get`/`post`, host adds `delete`, admin
-  adds `put`/`patch`/`postForm`/`download`.
+- `api.ts` differs in **which verbs exist** — player has `get`/`post`; host and admin both have
+  every verb plus `postForm`/`download`, and throw an `ApiError` carrying the HTTP status. All
+  three share one error-message helper (below).
 
 Treat a fix in one as needing review in the other two. Check whether a difference is deliberate
 (player's touch sizing) before "resyncing" anything.
 
-### The one bug all three share
+### Error messages: one rule, three copies
 
-**Every `lib/api.ts` reads `err.detail` from error responses, but the backend sends
-`{"error": code, "message": ...}`.** No `detail` key exists on `BuzzerError` responses, so every
-401/403/404/409 surfaces as a bare `HTTP <status>` and the server's real message is discarded.
-Only 422 carries `detail`, and there it's an array that stringifies into noise. Admin repeats the
-same expression three times in one file.
+The backend sends three error shapes: `{"error", "message"}` for app errors (including the 422
+`UNPROCESSABLE`), `{"detail": "..."}` from a plain HTTPException, and `{"detail": [{msg, …}]}`
+for request validation. Every `lib/api.ts` now applies the same rule: use `message` if it's a
+string, else a string `detail`, else join the array's `msg`s with `"; "`, else `HTTP <status>`.
+(They used to read only `detail`, which discarded every server message.) It's still three copies
+of the rule — change one, change all three.
 
-The impact is worst where the server's messages are most specific: guest join collisions in
-player ("This email is already associated with an account"), and question validation and delete
-conflicts in admin. Reading `message` first would fix all three. *Noted, not scheduled.*
+The one path it doesn't cover is the hand-rolled `fetch` for `/api/auth/exchange-temp` in the host
+and player `LoginPage`s, which still reads only `detail`. *Noted, not scheduled.*
 
 ### Cross-stack logic that must move together
 
-- **Question types** — adding one touches every app: host, player, and admin each switch on type
-  in several files. The one checklist is in the backend's
+- **Question types** — adding one touches the host (game screens *and* the question editor) and
+  the player, each switching on type in several files. The one checklist is in the backend's
   [app/CLAUDE.md](../backend/app/CLAUDE.md).
 - **Levenshtein distance** — three implementations: `rapidfuzz` in `game_service`, a hand-rolled
   one in `report_service`, and a third in host's `ResultsPage`. `rapidfuzz` decides the score; the
@@ -130,11 +139,11 @@ conflicts in admin. Reading `message` first would fix all three. *Noted, not sch
   mismatch makes the display disagree with the score.
 - **Histogram bucketing** — host's `GameOverPage` and the backend's `report_service` mirror each
   other (the backend carries a comment saying so) and already disagree on rounding.
-- **Roster CSV parsing** — admin's `RosterPage` wizard reimplements `roster_service`, and they
+- **Roster CSV parsing** — host's `RosterPage` wizard reimplements `roster_service`, and they
   title-case differently, so the same student's stored name depends on the import path used.
-- **`points_value` is derived by admin's question editor**, and host and player both read
-  correctness off that relationship. It's an undocumented contract spanning all three apps and
-  the backend.
+- **`points_value` is derived by host's question editor**, and host's game screens and the player
+  both read correctness off that relationship. It's an undocumented contract spanning the
+  frontend apps and the backend.
 
 ### Shared shortcuts
 
@@ -143,8 +152,14 @@ conflicts in admin. Reading `message` first would fix all three. *Noted, not sch
 - **Types are hand-written and drift.** Nothing generates them from the backend's OpenAPI schema;
   host's `types/game.ts` declares fields the server never sends, player's omits fields it does
   send, and admin has no `types/` at all (each page redeclares its own).
-- **Route guards check only that a token string exists** — not validity, not expiry, not role.
-  Admin's `RequireAdmin` doesn't verify the user is an admin.
+- **Route guards mostly check only that a token string exists.** The exceptions are host's
+  `HostShell` and admin's `RequireAdmin`, which ask `/api/auth/me` on entry (401 → sign-in page;
+  guest or non-admin → a notice). Host's game routes and the whole player app still don't check
+  validity or role up front; the player checks expiry locally.
+- **"Save, then reload" can show stale data for a moment.** The backend commits many writes just
+  *after* responding (see the backend's [routers/CLAUDE.md](../backend/app/routers/CLAUDE.md)),
+  so the `await load()` that host and admin pages run after a mutation can read the old state.
+  *Noted, not scheduled.*
 - `StrictMode` double-invokes effects in dev, so sockets connect twice and `load()` runs twice.
   Expected.
 - Gitignored build artifacts (`vite.config.js`, `tailwind.config.js`, `*.d.ts`, `*.tsbuildinfo`)

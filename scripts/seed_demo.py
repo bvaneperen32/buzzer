@@ -198,7 +198,7 @@ def create_course(client: httpx.Client) -> int:
     return course["id"]
 
 
-def create_game(client: httpx.Client) -> int:
+def create_game(client: httpx.Client, course_id: int) -> int:
     resp = client.post(
         f"{BASE_URL}/api/admin/games",
         json={
@@ -208,6 +208,7 @@ def create_game(client: httpx.Client) -> int:
                 "ACCURACY questions reward correct answers only; "
                 "COMPLETENESS questions reward participation."
             ),
+            "course_id": course_id,
         },
     )
     resp.raise_for_status()
@@ -247,7 +248,7 @@ def main() -> None:
         client.headers["Authorization"] = f"Bearer {token}"
 
         course_id = create_course(client)
-        game_id = create_game(client)
+        game_id = create_game(client, course_id)
 
         print(f"\n{AR} Creating {len(QUESTIONS)} questions …\n")
         create_questions(client, game_id)

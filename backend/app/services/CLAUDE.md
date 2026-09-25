@@ -18,12 +18,35 @@ export/report generation actually live.
   (documented at the top of the file: `room:{code}`, `session:{id}:players`,
   `:player:{uid}`, `:question`, `:answered:{qid}`, `:dist:{qid}`). Also `restore_from_mysql`
   (never called — see Gotchas).
-- `game_service.py` — the core. Room code generation, host access assertions, session lifecycle
+- `game_service.py` — the core. Room code generation, the access rules, session lifecycle
   (`create_room` → `start_game` → `complete_game` / `abandon_game`), `authorise_player`,
-  `calculate_score`, `record_answer`, and the leaderboard / game-over summary builders.
+  `calculate_score`, `record_answer`, and the leaderboard / game-over summary builders. The
+  access rules:
+  - `has_host_grant` — the single per-resource HOST check (a `user_course_access` row with role
+    `HOST`; a `PLAYER` row isn't one). Every rule below uses it, as does the admin router's grant
+    validation.
+  - `assert_host_can_use_course` (the course rule) and `assert_host_can_use_game` (the game rule,
+    for running *and* editing; returns the `Game`). Both let `ADMIN` through first, and 404 a
+    missing resource for admins.
+  - `user_can_host_session` — the session-host predicate behind `assert_can_download_session`,
+    `assert_can_delete_session`, `my-active-sessions`, and the socket HOST join.
+  - Grant side effects: `revoke_game_grants_for_course` (a user lost HOST on a course) and
+    `revoke_game_grants_without_host` (a game moved course). Both only ever delete rows.
+  - `list_sessions_for` — the role-scoped session list behind `GET /api/host/sessions`.
+  - `GUESTS_NOT_ALLOWED` — the guest-refusal message shared by `/auth/guest` and
+    `authorise_player`.
+- `game_management_service.py` — every write to `games` and `questions`, shared by the admin
+  and host routers: `create_game` (requires a course; a non-admin creator gets a game grant),
+  `update_game` (only this path changes `course_id`, and it triggers the grant revocation),
+  question list/create/update/delete/reorder, and bundle `export_game` / `import_game`. It owns
+  `sanitize_prompt`, the **only** place prompts are bleach-sanitized. Access checks are the
+  caller's job; nothing here decides who may do what.
 - `roster_service.py` — two roster import paths: `process_roster_csv` (Canvas gradebook export,
   parsed server-side) and `process_roster_rows` (pre-mapped rows from the frontend column
   wizard). Both upsert by `(course_id, netid)` and deactivate netids absent from the upload.
+  Also `list_roster` and `patch_roster_entry`, shared by the admin and host routers.
+  `patch_roster_entry` 404s an entry from another course than the one in the URL — the only
+  thing stopping a host of course A from editing course B's roster through A's URL.
 - `export_service.py` — `build_session_csv` (raw Player × Question grid) and `build_canvas_csv`
   (Canvas gradebook import format, with `per_question` and `roster_only` modes).
 - `report_service.py` — `build_session_report`, a self-contained HTML session report with
@@ -38,7 +61,41 @@ import `common.dependencies` — that module imports `auth_service`, so doing so
 Services take `db: AsyncSession` and `redis: Redis` as arguments rather than resolving them
 themselves, which is what makes them testable without a request context.
 
+`game_management_service` imports `game_service` (for the grant revocation on a course change),
+never the reverse.
+
 ## Gotchas
+
+### Access and authoring
+
+- **HOST is a live, per-course grant, checked on every request.** `game_sessions.host_user_id` is
+  a historical record, not a permission: `user_can_host_session` always pairs it with a current
+  HOST grant, so a host removed from a course can't download, delete, or rejoin its sessions.
+- **Game grants never outlive what makes them effective.** Losing HOST on a course deletes the
+  user's grants for that course's games; moving a game deletes grants held by users who don't
+  HOST the new course. Neither side effect ever *adds* a grant — the only grant a non-admin can
+  cause is `create_game`'s auto-grant to its creator.
+- Admin creators get no auto-grant (they bypass the rule), so **an admin later demoted to USER
+  loses the games they authored** until they get HOST on the course and a grant.
+- The game rule gives non-admins the same 403 whether or not the game exists, so it doesn't
+  reveal which ids exist.
+- `list_sessions_for`'s host join and score-count join **must stay outer**: `host_user_id` is
+  nullable and a LOBBY session has no scores, so inner joins would silently drop sessions.
+- `update_question` validates the merged question with `QuestionCreate` (explicit `null`s mean
+  "unchanged"). A question already stored in an invalid state therefore refuses every edit until
+  the edit makes it valid; the 422 message says why.
+- `delete_question` refuses (409) once any session has answered the question, rather than deleting
+  score rows and rewriting past results.
+- **Nothing blocks question edits, reorders, or deletes while a LOBBY or IN_PROGRESS session of
+  the game exists.** That was always true for admins, but hosts — the people running games — now
+  have the same access. A mid-game edit can change what later questions show or how they score.
+  If that bites, the fix is a 409 from these service functions while such a session exists.
+- `game_created` and `game_imported` are logged inside the service, *before* the router commits,
+  so a log line can exist for a create that then fails to commit. Grant revocations log as
+  `game_grants_revoked_host_lost` / `game_grants_revoked_game_moved` with the row count.
+- `authorise_player` refuses a `GUEST` when the session has `allow_guests` off. It's the
+  backstop: a guest holding a still-valid token skips `/auth/guest` and goes straight to the
+  socket.
 
 ### Scoring and question types
 
@@ -84,8 +141,9 @@ themselves, which is what makes them testable without a request context.
 - `create_room` enforces the global room cap with `redis.keys("room:*")` plus a `GET` per key —
   O(N) and blocking. `state_service.delete_room_state` uses `redis.keys()` the same way. Fine at
   50 rooms; the wrong primitive if this ever grows.
-- `create_room` calls `await db.get(Game, game_id)` and discards the result — dead code; access was
-  already validated above it.
+- `create_room` runs the course rule, then the game rule, then requires
+  `game.course_id == course_id` — **for admins too** (409 "This game belongs to a different
+  course"). So an unassigned game can't be run by anyone until an admin assigns it a course.
 - `complete_game` and `abandon_game` take a `redis` argument but `complete_game` never uses it.
   Its comment claims Redis state is kept "10 more minutes"; nothing sets a 10-minute TTL — the
   state simply rides out the remaining 90-minute room TTL.
@@ -149,8 +207,9 @@ themselves, which is what makes them testable without a request context.
 - `build_canvas_csv` writes empty `ID` and `SIS User ID` columns; Canvas matches on SIS Login ID
   alone. `roster_only=True` (the default) drops guests and local accounts, since they have no netid.
 - **`report_service` embeds `q.prompt` as raw HTML**, relying on the bleach sanitization done at
-  write time in `routers/admin.py`. That invariant is the only thing preventing stored XSS in the
-  report — any new write path for questions must bleach too.
+  write time in `game_management_service.sanitize_prompt`. That invariant is the only thing
+  preventing stored XSS in the report — any new write path for questions must go through that
+  service.
 - **The report claims "no personally identifiable information", but the fill-in-the-blank word
   cloud renders raw player-typed text.** Players can type anything, including their own or
   someone else's name. It's escaped, so it's not an injection issue — it's a privacy claim the

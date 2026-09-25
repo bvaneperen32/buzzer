@@ -19,7 +19,7 @@ export default function LoginPage() {
     try {
       const data = await api.post<{ access_token: string }>('/auth/login', { username, password });
       localStorage.setItem('token', data.access_token);
-      navigate('/courses');
+      navigate('/users');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {

@@ -12,8 +12,9 @@ export default function NamePage() {
   const { code = '' } = useParams<{ code: string }>();
   const navigate = useNavigate();
 
-  // Only treat the token as valid if it is present AND not expired
-  const isAuthenticated = !isTokenExpired(localStorage.getItem('token'));
+  // Only treat the token as valid if it is present AND not expired. State, not a render-time
+  // read, so "Use a different account" can re-render the page after removing the token.
+  const [isAuthenticated, setIsAuthenticated] = useState(() => !isTokenExpired(localStorage.getItem('token')));
   const [mode, setMode] = useState<Mode>(isAuthenticated ? 'netid' : 'guest');
 
   // Guest fields — pre-fill from localStorage if available
@@ -46,6 +47,15 @@ export default function NamePage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  // A stored guest token skips /auth/guest, so without this a guest refused by a no-guests room
+  // couldn't reach NetID sign-in until the token expired.
+  function switchAccount() {
+    localStorage.removeItem('token');
+    setIsAuthenticated(false);
+    setMode('guest');
+    setError('');
   }
 
   async function handleLogin(e: React.FormEvent) {
@@ -139,13 +149,22 @@ export default function NamePage() {
             <div className="space-y-3">
               {isAuthenticated ? (
                 /* Already signed in via OAuth2 — go straight to lobby */
-                <Button
-                  className="w-full"
-                  size="lg"
-                  onClick={() => navigate(`/game/${code}/lobby`)}
-                >
-                  Join Game
-                </Button>
+                <>
+                  <Button
+                    className="w-full"
+                    size="lg"
+                    onClick={() => navigate(`/game/${code}/lobby`)}
+                  >
+                    Join Game
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={switchAccount}
+                    className="w-full text-slate-500 text-sm hover:text-slate-300 transition-colors"
+                  >
+                    Use a different account
+                  </button>
+                </>
               ) : (
                 /* Trigger OAuth2 — save room code so we can return here after auth */
                 <a

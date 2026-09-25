@@ -74,22 +74,41 @@ async def my_courses(
 async def my_games(
     user: Annotated[User, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> list[Game]:
+) -> list[dict]:
     """
-    Returns games the authenticated user can run.
-    ADMIN sees all games; USER sees games from user_game_access.
+    Returns games the authenticated user can run and edit.
+    ADMIN sees all games, including unassigned ones; USER sees games they hold a
+    grant for on a course they HOST (so unassigned games never match).
     """
-    if user.role == "ADMIN":
-        result = await db.execute(select(Game).order_by(Game.title))
-        return result.scalars().all()
-
-    result = await db.execute(
-        select(Game)
-        .join(UserGameAccess, UserGameAccess.game_id == Game.id)
-        .where(UserGameAccess.user_id == user.id)
-        .order_by(Game.title)
+    query = (
+        select(Game, Course.name, Course.semester)
+        .outerjoin(Course, Course.id == Game.course_id)
+        .order_by(Course.name, Course.semester, Game.title)
     )
-    return result.scalars().all()
+    if user.role != "ADMIN":
+        query = (
+            query.join(UserGameAccess, UserGameAccess.game_id == Game.id)
+            .join(UserCourseAccess, UserCourseAccess.course_id == Game.course_id)
+            .where(
+                UserGameAccess.user_id == user.id,
+                UserCourseAccess.user_id == user.id,
+                UserCourseAccess.role == "HOST",
+            )
+        )
+
+    result = await db.execute(query)
+    return [
+        {
+            "id": g.id,
+            "title": g.title,
+            "description": g.description,
+            "max_players": g.max_players,
+            "course_id": g.course_id,
+            "course_name": course_name,
+            "course_semester": course_semester,
+        }
+        for g, course_name, course_semester in result.all()
+    ]
 
 
 @router.get("/my-active-sessions", response_model=list[ActiveSessionItem])
@@ -110,6 +129,9 @@ async def my_active_sessions(
 
     rows = []
     for s in sessions:
+        # Offer only rooms the socket would let this user rejoin as HOST.
+        if not await game_service.user_can_host_session(db, user, s):
+            continue
         game = await db.get(Game, s.game_id)
         course = await db.get(Course, s.course_id)
         rows.append(
@@ -132,15 +154,9 @@ async def delete_session(
     db: Annotated[AsyncSession, Depends(get_db)],
     redis=Depends(get_redis),
 ) -> None:
-    """Permanently delete a session and all associated scores. Host or admin only."""
-    session = await db.get(GameSession, session_id)
-    if not session:
-        raise NotFoundError(f"Session {session_id} not found")
-
-    if user.role != "ADMIN" and session.host_user_id != user.id:
-        from ..common.exceptions import ForbiddenError
-
-        raise ForbiddenError("Only the session host can delete this session")
+    """Permanently delete a session and all associated scores. Admin, or the session's
+    host while they still HOST its course."""
+    session = await game_service.assert_can_delete_session(db, user, session_id)
 
     # Wipe Redis state (room key, player keys, question key, answered sets, dist hashes)
     await state.delete_room_state(redis, session.room_code, session_id)
@@ -171,6 +187,7 @@ async def create_room(
         game_id=body.game_id,
         course_id=body.course_id,
         max_rooms=settings.MAX_ROOMS,
+        allow_guests=body.allow_guests,
     )
     return {"room_code": session.room_code, "session_id": session.id}
 
@@ -332,15 +349,9 @@ async def export_session_scores(
     user: Annotated[User, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> StreamingResponse:
-    """Download session scores as a CSV. Accessible by the session host or an admin."""
-    session = await db.get(GameSession, session_id)
-    if not session:
-        raise NotFoundError(f"Session {session_id} not found")
-
-    if user.role != "ADMIN" and session.host_user_id != user.id:
-        from ..common.exceptions import ForbiddenError
-
-        raise ForbiddenError("Only the session host can export scores")
+    """Download a completed session's scores as raw CSV. Same download rule as
+    /api/host/sessions/{id}/export, so this can't be a looser path around it."""
+    await game_service.assert_can_download_session(db, user, session_id)
 
     from ..services.export_service import build_session_csv
 

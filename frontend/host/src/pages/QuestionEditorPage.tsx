@@ -223,7 +223,7 @@ function QuestionForm({
         <textarea
           className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none text-sm"
           rows={3}
-          placeholder="Question text\u2026"
+          placeholder="Question text…"
           value={form.prompt}
           onChange={(e) => set('prompt', e.target.value)}
           required
@@ -490,7 +490,7 @@ function QuestionForm({
 
       <div className="flex gap-3">
         <Button type="button" onClick={() => onSave(formToPayload(form))} disabled={saving}>
-          {saving ? 'Saving\u2026' : 'Save Question'}
+          {saving ? 'Saving…' : 'Save Question'}
         </Button>
         <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
       </div>
@@ -515,8 +515,8 @@ export default function QuestionEditorPage() {
   async function load() {
     try {
       const [g, qs] = await Promise.all([
-        api.get<Game>(`/admin/games/${gameId}`),
-        api.get<Question[]>(`/admin/games/${gameId}/questions`),
+        api.get<Game>(`/host/games/${gameId}`),
+        api.get<Question[]>(`/host/games/${gameId}/questions`),
       ]);
       setGame(g);
       setQuestions(qs);
@@ -533,7 +533,7 @@ export default function QuestionEditorPage() {
     setSaving(true);
     setError('');
     try {
-      await api.post(`/admin/games/${gameId}/questions`, payload);
+      await api.post(`/host/games/${gameId}/questions`, payload);
       setShowAddForm(false);
       await load();
     } catch (err) {
@@ -547,7 +547,7 @@ export default function QuestionEditorPage() {
     setSaving(true);
     setError('');
     try {
-      await api.put(`/admin/games/${gameId}/questions/${id}`, payload);
+      await api.put(`/host/games/${gameId}/questions/${id}`, payload);
       setEditingId(null);
       await load();
     } catch (err) {
@@ -560,7 +560,7 @@ export default function QuestionEditorPage() {
   async function deleteQuestion(id: number) {
     if (!confirm('Delete this question?')) return;
     try {
-      await api.delete(`/admin/games/${gameId}/questions/${id}`);
+      await api.delete(`/host/games/${gameId}/questions/${id}`);
       setQuestions((prev) => prev.filter((q) => q.id !== id));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete question');
@@ -573,7 +573,7 @@ export default function QuestionEditorPage() {
     if (target < 0 || target >= newOrder.length) return;
     [newOrder[index], newOrder[target]] = [newOrder[target], newOrder[index]];
     try {
-      await api.post(`/admin/games/${gameId}/questions/reorder`, {
+      await api.post(`/host/games/${gameId}/questions/reorder`, {
         order: newOrder.map((q) => q.id),
       });
       setQuestions(newOrder);
@@ -586,7 +586,7 @@ export default function QuestionEditorPage() {
     setDownloading(true);
     setError('');
     try {
-      await api.download(`/admin/games/${gameId}/export`);
+      await api.download(`/host/games/${gameId}/export`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Export failed');
     } finally {
@@ -601,7 +601,7 @@ export default function QuestionEditorPage() {
     multi_select: 'Multi',
   };
 
-  if (loading) return <div className="p-8 text-slate-400">Loading\u2026</div>;
+  if (loading) return <div className="p-8 text-slate-400">Loading…</div>;
 
   return (
     <div className="p-8 max-w-4xl space-y-6">
@@ -624,7 +624,7 @@ export default function QuestionEditorPage() {
             disabled={downloading}
           >
             <Download size={14} className="mr-1" />
-            {downloading ? 'Exporting\u2026' : 'Export JSON'}
+            {downloading ? 'Exporting…' : 'Export JSON'}
           </Button>
           <Button size="sm" onClick={() => { setShowAddForm(true); setEditingId(null); }}>
             <Plus size={14} className="mr-1" /> Add Question
@@ -700,7 +700,7 @@ export default function QuestionEditorPage() {
                     <span className="px-1.5 py-0.5 rounded text-xs bg-slate-700 text-slate-300">
                       {q.grading_type}
                     </span>
-                    <span className="text-slate-500 text-xs">{q.time_limit_seconds}s \u00b7 {q.points_value}pts</span>
+                    <span className="text-slate-500 text-xs">{q.time_limit_seconds}s · {q.points_value}pts</span>
                   </div>
                   <p className="text-slate-100 text-sm leading-relaxed">{q.prompt}</p>
 
@@ -738,7 +738,7 @@ export default function QuestionEditorPage() {
                     <div className="mt-2 text-xs text-slate-400">
                       Accepted: {((q.answer_data['acceptedAnswers'] as string[]) ?? []).join(', ')}
                       {(q.answer_data['editDistance'] as number) > 0 && (
-                        <span className="ml-2 text-slate-500">(\u00b1{q.answer_data['editDistance'] as number} edit distance)</span>
+                        <span className="ml-2 text-slate-500">(±{q.answer_data['editDistance'] as number} edit distance)</span>
                       )}
                     </div>
                   )}

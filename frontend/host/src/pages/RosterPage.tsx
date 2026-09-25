@@ -6,6 +6,8 @@ import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 
+interface Course { id: number; name: string; semester: string }
+
 interface RosterEntry {
   id: number;
   netid: string;
@@ -118,6 +120,10 @@ export default function RosterPage() {
   const navigate = useNavigate();
   const fileRef = useRef<HTMLInputElement>(null);
 
+  // Heading: "Roster" until the course loads, and if it isn't one of the user's courses (the
+  // roster request then fails with its own message).
+  const [course, setCourse] = useState<Course | null>(null);
+
   // Roster list
   const [entries, setEntries] = useState<RosterEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -144,7 +150,7 @@ export default function RosterPage() {
 
   async function load() {
     try {
-      const data = await api.get<RosterEntry[]>(`/admin/courses/${courseId}/roster`);
+      const data = await api.get<RosterEntry[]>(`/host/courses/${courseId}/roster`);
       setEntries(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load roster');
@@ -154,6 +160,12 @@ export default function RosterPage() {
   }
 
   useEffect(() => { void load(); }, [courseId]);
+
+  useEffect(() => {
+    api.get<Course[]>('/game/my-courses')
+      .then((cs) => setCourse(cs.find((c) => String(c.id) === courseId) ?? null))
+      .catch(() => {});
+  }, [courseId]);
 
   // ── File selected: parse + auto-detect ───────────────────────────────────
   function handleFileSelect(file: File) {
@@ -222,7 +234,7 @@ export default function RosterPage() {
     setError('');
     try {
       const result = await api.post<UploadResult>(
-        `/admin/courses/${courseId}/roster/import`,
+        `/host/courses/${courseId}/roster/import`,
         { rows },
       );
       setUploadResult(result);
@@ -268,7 +280,7 @@ export default function RosterPage() {
     setError('');
     try {
       const updated = await api.patch<RosterEntry>(
-        `/admin/courses/${courseId}/roster/${entryId}`,
+        `/host/courses/${courseId}/roster/${entryId}`,
         editDraft,
       );
       setEntries((prev) => prev.map((e) => e.id === entryId ? updated : e));
@@ -292,14 +304,16 @@ export default function RosterPage() {
   return (
     <div className="p-8 max-w-5xl">
       <button
-        onClick={() => navigate('/courses')}
+        onClick={() => navigate('/rosters')}
         className="flex items-center gap-2 text-slate-400 hover:text-slate-100 text-sm mb-6"
       >
-        <ArrowLeft size={14} /> Back to Courses
+        <ArrowLeft size={14} /> Back to Rosters
       </button>
 
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold text-slate-100">Course Roster</h2>
+        <h2 className="text-2xl font-bold text-slate-100">
+          {course ? `Roster — ${course.name} (${course.semester})` : 'Roster'}
+        </h2>
         {step === 'idle' && (
           <>
             <input

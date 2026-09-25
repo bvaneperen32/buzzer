@@ -7,8 +7,9 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models.course import CourseRoster
-from ..schemas.admin import RosterUploadResult
+from ..common.exceptions import NotFoundError
+from ..models.course import Course, CourseRoster
+from ..schemas.admin import RosterEntryPatch, RosterUploadResult
 
 logger = structlog.get_logger()
 
@@ -283,3 +284,40 @@ async def process_roster_rows(
         deactivated=deactivated,
         errors=errors,
     )
+
+
+async def list_roster(db: AsyncSession, course_id: int) -> list[CourseRoster]:
+    course = await db.get(Course, course_id)
+    if not course:
+        raise NotFoundError(f"Course {course_id} not found")
+    result = await db.execute(
+        select(CourseRoster)
+        .where(CourseRoster.course_id == course_id)
+        .order_by(CourseRoster.full_name)
+    )
+    return result.scalars().all()
+
+
+async def patch_roster_entry(
+    db: AsyncSession, course_id: int, roster_id: int, patch: RosterEntryPatch
+) -> CourseRoster:
+    # Matching on course_id as well as id is what stops a host of one course from
+    # editing another course's roster through their own course's URL.
+    result = await db.execute(
+        select(CourseRoster).where(
+            CourseRoster.id == roster_id,
+            CourseRoster.course_id == course_id,
+        )
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise NotFoundError(f"Roster entry {roster_id} not found in course {course_id}")
+    if patch.is_active is not None:
+        entry.is_active = patch.is_active
+    if patch.netid is not None:
+        entry.netid = patch.netid.strip().lower()
+    if patch.full_name is not None:
+        entry.full_name = patch.full_name.strip()
+    if patch.email is not None:
+        entry.email = str(patch.email).lower()
+    return entry

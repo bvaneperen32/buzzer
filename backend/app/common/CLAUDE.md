@@ -14,9 +14,13 @@ blast radius — nearly every router imports from here.
   `require_user` (anything but `GUEST`) are the two guards routers depend on.
   `get_refresh_token` reads the `refresh_token` cookie.
 - `exceptions.py` — `BuzzerError` base plus `NotFoundError` (404), `ForbiddenError` (403),
-  `UnauthorizedError` (401), `ConflictError` (409). `register_exception_handlers(app)` wires
-  three handlers: app errors → `{"error": code, "message": ...}`, validation errors → 422 with
-  `{"error": "VALIDATION_ERROR", "detail": [...]}`, and a catch-all → generic 500.
+  `UnauthorizedError` (401), `ConflictError` (409), and `UnprocessableError` (422, code
+  `UNPROCESSABLE` — raised for bad import bundles and invalid merged question edits).
+  `register_exception_handlers(app)` wires three handlers: app errors →
+  `{"error": code, "message": ...}`, request-validation errors → 422 with
+  `{"error": "VALIDATION_ERROR", "detail": [...]}`, and a catch-all → generic 500. **So a 422 comes
+  in two shapes**: `UnprocessableError`'s readable `message`, or FastAPI validation's `detail`
+  array. The frontends' `api.ts` error helpers read `message`, then `detail`.
 - `logging.py` — `configure_logging()` sets up structlog: console renderer in development, JSON
   in production. Called once from [main.py](../main.py).
 - `rate_limit.py` — the shared slowapi `limiter`. Routers apply it per-endpoint with

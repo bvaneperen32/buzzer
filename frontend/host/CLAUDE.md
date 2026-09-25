@@ -2,10 +2,12 @@
 
 ## Purpose
 
-The Host client — one of the three frontend apps. It runs on the presenter's machine and is
-projected onto a large screen: room code and QR for joining, the current question, live answer
-visualisations, and the controls that drive the game. It is the only client permitted to advance
-game state.
+The Host client — one of the three frontend apps. It runs on the presenter's machine. Its game
+screens are projected onto a large screen: room code and QR for joining, the current question,
+live answer visualisations, and the controls that drive the game. It is the only client permitted
+to advance game state. Behind a sidebar shell it is also where hosts (and admins) author games and
+questions, manage course rosters, and download completed sessions' results, for the courses they
+HOST.
 
 ## Contents
 
@@ -30,8 +32,10 @@ and served under its own path prefix. They share no code — the `Button`, `Card
 `api` helpers are duplicated per app rather than extracted into a shared package. Treat a fix in
 one as needing review in the other two.
 
-All three talk to the same FastAPI backend: REST under `/api`, socket.io under `/socket.io`. This
-app is socket-first (the game runs over events) and uses REST only for setup and teardown.
+All three talk to the same FastAPI backend: REST under `/api`, socket.io under `/socket.io`. The
+game screens are socket-first (the game runs over events); the management pages are REST-only,
+mostly over `/api/host/*`. The admin console links into this app ("Host tools") rather than
+duplicating it.
 
 ## Running it
 
@@ -64,4 +68,5 @@ just this one. The dev proxy assumes the backend is reachable at `localhost:8000
 - **UI primitives are copy-pasted across the three apps.** Divergence is the default here; if you
   change `Button` or `api.ts`, check whether `player` and `admin` need the same change.
 - This app assumes a wide landscape viewport and a dark background. `index.html` still declares
-  the standard mobile viewport meta tag, but no screen here is designed for phone width.
+  the standard mobile viewport meta tag, but no screen here is designed for phone width — the
+  game screens are projector-scale, the management pages desktop-dense.

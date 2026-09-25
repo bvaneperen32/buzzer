@@ -18,19 +18,21 @@ writes through these classes.
 - `course.py` — `Course` (name + semester), `CourseRoster` (the imported student list: netid,
   full_name, email, `is_active`), and `UserCourseAccess` (composite-PK join table granting a user
   `HOST` or `PLAYER` in a course).
-- `game.py` — `Game` (title, description, `max_players`), `Question` (the content unit), and
+- `game.py` — `Game` (title, description, `max_players`, and a nullable `course_id` — the one
+  course the game belongs to; NULL means unassigned), `Question` (the content unit), and
   `UserGameAccess` (composite-PK join granting a user access to a game; no role column — access
   is binary).
-- `session.py` — `GameSession` (one live playthrough: `room_code`, `status`, host, game, course)
-  and `SessionScore` (one row per player per question: points, correctness, latency, and the raw
-  submitted answer).
+- `session.py` — `GameSession` (one live playthrough: `room_code`, `status`, host, game, course,
+  and `allow_guests`) and `SessionScore` (one row per player per question: points, correctness,
+  latency, and the raw submitted answer).
 
 ## How it fits in
 
-Bottom of the backend stack. `services/` owns the game logic over these models, but routers and
-the gateway also query them directly: most of `routers/admin.py` is inline CRUD, `routers/game.py`
-does its own lookups, and `websocket/gateway.py` runs a few `select`s itself. Don't assume a
-service sits between every caller and a table.
+Bottom of the backend stack. `services/` owns the game logic over these models, and every write
+to `games` and `questions` goes through `services/game_management_service.py`. But routers and the
+gateway also query them directly: `routers/admin.py` still does course, user, and grant CRUD
+inline, `routers/game.py` does its own lookups, and `websocket/gateway.py` runs a few `select`s
+itself. Don't assume a service sits between every caller and a table.
 `schemas/` mirrors parts of this shape as Pydantic request/response types — the two are
 deliberately separate, so a field added here is not automatically exposed over the API.
 
@@ -59,8 +61,17 @@ realize these models live in [migrations/versions/](../migrations/versions/).
   A bare ORM delete of a parent with history makes SQLAlchemy null the NOT NULL FK, which MySQL
   rejects. The admin endpoints for **games and users** work around that by deleting the dependent
   session/score rows first — so those deletes *silently erase results*
-  ([routers/CLAUDE.md](../routers/CLAUDE.md)). **Questions** have no such workaround: deleting any
-  question that has ever been answered fails with a 500.
+  ([routers/CLAUDE.md](../routers/CLAUDE.md)). **Questions** have no such workaround, so the
+  service refuses (409) to delete any question that has ever been answered, rather than
+  deleting scores.
+- **`games.course_id` is nullable, with no backfill** (migration `004`). Games that existed before
+  it stay unassigned: invisible to hosts and unrunnable by anyone until an admin assigns a course.
+  The FK (`fk_games_course_id`) has no `ondelete`, which is fine only because courses have no
+  delete endpoint.
+- `GameSession.course_id` records the course a session was *played in*. Moving a game to another
+  course doesn't touch its past sessions.
+- `GameSession.allow_guests` is NOT NULL with server default true, so existing sessions and
+  callers that omit it admit guests.
 - **`SessionScore` has no unique constraint on (`session_id`, `user_id`, `question_id`)** — only a
   non-unique index on (`session_id`, `user_id`). Nothing in the schema stops a player being scored
   twice for one question; the only guard is a non-atomic Redis check in the gateway. The
@@ -68,6 +79,7 @@ realize these models live in [migrations/versions/](../migrations/versions/).
 - **`User.email` is UNIQUE, and guests are identified by email.** A guest row holding a student's
   address blocks creating their real account with the same email — see
   [services/CLAUDE.md](../services/CLAUDE.md).
-- `GameSession.host_user_id` is nullable; a session can outlive or predate a known host.
+- `GameSession.host_user_id` is nullable; a session can outlive or predate a known host. It's a
+  historical record, not a permission — see [services/CLAUDE.md](../services/CLAUDE.md).
 - `room_code` is `String(6)` and globally unique across all time, not just active sessions — code
   generation has to handle collisions with completed sessions.

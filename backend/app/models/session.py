@@ -47,6 +47,9 @@ class GameSession(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    allow_guests: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa.true()
+    )
 
     game: Mapped[Game] = relationship("Game", back_populates="sessions")
     course: Mapped[Course] = relationship("Course", back_populates="sessions")
