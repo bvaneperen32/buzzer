@@ -2,9 +2,21 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Plus, Trash2, ChevronUp, ChevronDown, Download } from 'lucide-react';
 import { api } from '../lib/api';
+import { useImageLibrary } from '../lib/imageLibrary';
+import {
+  hasCaption,
+  optionImageIds,
+  optionLetter,
+  promptImageId,
+} from '../lib/questionImages';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Card, CardContent, CardHeader } from '../components/ui/card';
+import { SafeImage } from '../components/ui/SafeImage';
+import { ImageLibraryPanel } from '../components/images/ImageLibraryPanel';
+import { ImagePicker } from '../components/images/ImagePicker';
+import type { QuestionConfig } from '../types/game';
+import type { ImageItem } from '../types/images';
 
 type QuestionType = 'multiple_choice' | 'true_false' | 'fill_in_the_blank' | 'multi_select';
 type GradingType = 'ACCURACY' | 'COMPLETENESS';
@@ -25,11 +37,36 @@ interface Game { id: number; title: string }
 
 // ---- helpers for building config/answer_data per type ----
 
-interface McOption { text: string; points: number }
+interface McOption { text: string; points: number; imageId: number | null }
+
+/** Does any option row have an image? Only then do the image-option rules apply (T8 §2.7). */
+function hasOptionImages(options: McOption[]): boolean {
+  return options.some((o) => o.imageId !== null);
+}
+
+/**
+ * With option images, a row with neither text nor image is dropped before anything is derived,
+ * so a leftover blank row can't block saving. Without images, rows are used exactly as before.
+ */
+function optionRows(options: McOption[]): McOption[] {
+  return hasOptionImages(options)
+    ? options.filter((o) => o.text.trim() || o.imageId !== null)
+    : options;
+}
+
+/** `options`, plus `option_images` only when some option has an image, so text-only payloads
+ * are unchanged. A blank caption on an image option is saved as "". */
+function choiceConfig(options: McOption[]): Record<string, unknown> {
+  if (!hasOptionImages(options)) return { options: options.map((o) => o.text) };
+  return {
+    options: options.map((o) => (o.imageId !== null && !o.text.trim() ? '' : o.text)),
+    option_images: options.map((o) => o.imageId),
+  };
+}
 
 function buildMcPayload(options: McOption[], _grading: GradingType) {
   return {
-    config: { options: options.map((o) => o.text) },
+    config: choiceConfig(options),
     answer_data: { answer_points: options.map((o) => o.points) },
   };
 }
@@ -43,7 +80,7 @@ function buildTfPayload(truePoints: number, falsePoints: number) {
 
 function buildMsPayload(options: McOption[]) {
   return {
-    config: { options: options.map((o) => o.text) },
+    config: choiceConfig(options),
     answer_data: { answer_points: options.map((o) => o.points) },
   };
 }
@@ -67,6 +104,8 @@ interface FormState {
   type: QuestionType;
   grading: GradingType;
   prompt: string;
+  /** Any type can show an image with its prompt (projector only). */
+  promptImageId: number | null;
   timeLimitSeconds: number;
   pointsValue: number;
   // multiple_choice
@@ -85,29 +124,33 @@ const defaultForm = (): FormState => ({
   type: 'multiple_choice',
   grading: 'ACCURACY',
   prompt: '',
+  promptImageId: null,
   timeLimitSeconds: 30,
   pointsValue: 1,
-  mcOptions: [{ text: '', points: 1 }, { text: '', points: 0 }],
+  mcOptions: [{ text: '', points: 1, imageId: null }, { text: '', points: 0, imageId: null }],
   tfTruePoints: 1,
   tfFalsePoints: 0,
   fibAnswers: [{ text: '', points: 1 }],
   fibEditDistance: 0,
-  msOptions: [{ text: '', points: 1 }, { text: '', points: 1 }],
+  msOptions: [{ text: '', points: 1, imageId: null }, { text: '', points: 1, imageId: null }],
 });
 
 function questionToForm(q: Question): FormState {
+  const config = q.config as QuestionConfig;
+  const imageIds = optionImageIds(config);
   const base: FormState = {
     ...defaultForm(),
     type: q.type,
     grading: q.grading_type,
     prompt: q.prompt,
+    promptImageId: promptImageId(config),
     timeLimitSeconds: q.time_limit_seconds,
     pointsValue: q.points_value,
   };
   if (q.type === 'multiple_choice') {
     const opts = (q.config['options'] as string[]) ?? [];
     const pts = (q.answer_data['answer_points'] as number[]) ?? [];
-    base.mcOptions = opts.map((text, i) => ({ text, points: pts[i] ?? 0 }));
+    base.mcOptions = opts.map((text, i) => ({ text, points: pts[i] ?? 0, imageId: imageIds[i] ?? null }));
   } else if (q.type === 'true_false') {
     const ap = q.answer_data['answer_points'] as { true: number; false: number } | undefined;
     base.tfTruePoints = ap?.true ?? 1;
@@ -123,8 +166,8 @@ function questionToForm(q: Question): FormState {
     const opts = (q.config['options'] as string[]) ?? [];
     const pts = (q.answer_data['answer_points'] as number[]) ?? [];
     base.msOptions = opts.length
-      ? opts.map((text, i) => ({ text, points: pts[i] ?? 1 }))
-      : [{ text: '', points: 1 }, { text: '', points: 1 }];
+      ? opts.map((text, i) => ({ text, points: pts[i] ?? 1, imageId: imageIds[i] ?? null }))
+      : [{ text: '', points: 1, imageId: null }, { text: '', points: 1, imageId: null }];
   }
   return base;
 }
@@ -132,8 +175,12 @@ function questionToForm(q: Question): FormState {
 function formToPayload(form: FormState) {
   let config: Record<string, unknown> = {};
   let answer_data: Record<string, unknown> = {};
+  // Options, their images, their points and points_value all come from the same rows. With an
+  // image option those are the filtered rows; without one, exactly today's rows.
+  const mcRows = optionRows(form.mcOptions);
+  const msRows = optionRows(form.msOptions);
   if (form.type === 'multiple_choice') {
-    const p = buildMcPayload(form.mcOptions, form.grading);
+    const p = buildMcPayload(mcRows, form.grading);
     config = p.config;
     answer_data = p.answer_data;
   } else if (form.type === 'true_false') {
@@ -141,7 +188,9 @@ function formToPayload(form: FormState) {
     config = p.config;
     answer_data = p.answer_data;
   } else if (form.type === 'multi_select') {
-    const p = buildMsPayload(form.msOptions.filter((o) => o.text.trim()));
+    const p = buildMsPayload(
+      hasOptionImages(form.msOptions) ? msRows : form.msOptions.filter((o) => o.text.trim()),
+    );
     config = p.config;
     answer_data = p.answer_data;
   } else {
@@ -149,15 +198,18 @@ function formToPayload(form: FormState) {
     config = p.config;
     answer_data = p.answer_data;
   }
+  if (form.promptImageId !== null) {
+    config = { ...config, prompt_image_id: form.promptImageId };
+  }
   const points_value =
     form.grading === 'COMPLETENESS'
       ? form.pointsValue
       : form.type === 'multiple_choice'
-      ? Math.max(0, ...form.mcOptions.map((o) => o.points))
+      ? Math.max(0, ...mcRows.map((o) => o.points))
       : form.type === 'true_false'
       ? Math.max(form.tfTruePoints, form.tfFalsePoints)
       : form.type === 'multi_select'
-      ? form.msOptions.reduce((sum, o) => sum + (o.points > 0 ? o.points : 0), 0)
+      ? msRows.reduce((sum, o) => sum + (o.points > 0 ? o.points : 0), 0)
       : Math.max(0, ...form.fibAnswers.map((a) => a.points));
   return {
     type: form.type,
@@ -175,16 +227,42 @@ function QuestionForm({
   onSave,
   onCancel,
   saving,
+  images,
+  onUpload,
+  refreshImages,
 }: {
   initial: FormState;
   onSave: (payload: ReturnType<typeof formToPayload>) => void;
   onCancel: () => void;
   saving: boolean;
+  images: ImageItem[];
+  onUpload: (file: File, description: string) => Promise<ImageItem>;
+  refreshImages: () => Promise<void>;
 }) {
   const [form, setForm] = useState<FormState>(initial);
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  /** The image picker for one choice-option row. */
+  function optionPicker(key: 'mcOptions' | 'msOptions', i: number) {
+    const rows = form[key];
+    return (
+      <ImagePicker
+        label={`Option ${optionLetter(i)} image`}
+        value={rows[i].imageId}
+        images={images}
+        onSelect={(id) => {
+          const opts = [...form[key]];
+          opts[i] = { ...opts[i], imageId: id };
+          set(key, opts);
+        }}
+        onUpload={onUpload}
+        refresh={refreshImages}
+        compact
+      />
+    );
   }
 
   return (
@@ -228,6 +306,19 @@ function QuestionForm({
           onChange={(e) => set('prompt', e.target.value)}
           required
         />
+        <div className="mt-2">
+          <ImagePicker
+            label="Prompt image"
+            value={form.promptImageId}
+            images={images}
+            onSelect={(id) => set('promptImageId', id)}
+            onUpload={onUpload}
+            refresh={refreshImages}
+          />
+          <p className="text-slate-500 text-xs mt-1">
+            Shown on the projector below the prompt; phones never show it.
+          </p>
+        </div>
       </div>
 
       {/* Type-specific */}
@@ -243,9 +334,10 @@ function QuestionForm({
           )}
           <div className="space-y-2">
             {form.mcOptions.map((opt, i) => (
-              <div key={i} className="flex gap-2 items-center">
+              <div key={i} className="flex gap-2 items-start">
+                <div className="pt-1">{optionPicker('mcOptions', i)}</div>
                 <Input
-                  placeholder={`Option ${i + 1}`}
+                  placeholder={opt.imageId !== null ? `Caption (optional)` : `Option ${i + 1}`}
                   value={opt.text}
                   onChange={(e) => {
                     const opts = [...form.mcOptions];
@@ -285,7 +377,7 @@ function QuestionForm({
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => set('mcOptions', [...form.mcOptions, { text: '', points: 0 }])}
+              onClick={() => set('mcOptions', [...form.mcOptions, { text: '', points: 0, imageId: null }])}
             >
               <Plus size={12} className="mr-1" /> Add option
             </Button>
@@ -305,9 +397,10 @@ function QuestionForm({
           )}
           <div className="space-y-2">
             {form.msOptions.map((opt, i) => (
-              <div key={i} className="flex gap-2 items-center">
+              <div key={i} className="flex gap-2 items-start">
+                <div className="pt-1">{optionPicker('msOptions', i)}</div>
                 <Input
-                  placeholder={`Option ${i + 1}`}
+                  placeholder={opt.imageId !== null ? `Caption (optional)` : `Option ${i + 1}`}
                   value={opt.text}
                   onChange={(e) => {
                     const opts = [...form.msOptions];
@@ -346,7 +439,7 @@ function QuestionForm({
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => set('msOptions', [...form.msOptions, { text: '', points: 1 }])}
+              onClick={() => set('msOptions', [...form.msOptions, { text: '', points: 1, imageId: null }])}
             >
               <Plus size={12} className="mr-1" /> Add option
             </Button>
@@ -498,6 +591,33 @@ function QuestionForm({
   );
 }
 
+// ---- Question list thumbnails ----
+
+/** A library image as a list thumbnail, or "Missing image" for a reference the library lacks. */
+function ListThumb({ id, images, size, refresh }: {
+  id: number | null;
+  images: Map<number, ImageItem>;
+  size: string;
+  refresh: () => Promise<void>;
+}) {
+  if (id === null) return null;
+  const image = images.get(id);
+  if (!image) {
+    return <span className="text-amber-400 text-xs whitespace-nowrap">Missing image</span>;
+  }
+  return (
+    <SafeImage
+      key={image.id}
+      src={image.small_url}
+      alt={image.description}
+      className={`${size} shrink-0`}
+      fit="cover"
+      refresh={refresh}
+      compact
+    />
+  );
+}
+
 // ---- Main page ----
 
 export default function QuestionEditorPage() {
@@ -511,6 +631,9 @@ export default function QuestionEditorPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const imageLibrary = useImageLibrary(gameId);
+  const libraryImages = imageLibrary.library?.images ?? [];
+  const imagesById = new Map(libraryImages.map((img) => [img.id, img]));
 
   async function load() {
     try {
@@ -536,6 +659,7 @@ export default function QuestionEditorPage() {
       await api.post(`/host/games/${gameId}/questions`, payload);
       setShowAddForm(false);
       await load();
+      void imageLibrary.reload(); // uses and the export meter changed
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save question');
     } finally {
@@ -550,6 +674,7 @@ export default function QuestionEditorPage() {
       await api.put(`/host/games/${gameId}/questions/${id}`, payload);
       setEditingId(null);
       await load();
+      void imageLibrary.reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update question');
     } finally {
@@ -562,6 +687,7 @@ export default function QuestionEditorPage() {
     try {
       await api.delete(`/host/games/${gameId}/questions/${id}`);
       setQuestions((prev) => prev.filter((q) => q.id !== id));
+      void imageLibrary.reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete question');
     }
@@ -577,6 +703,7 @@ export default function QuestionEditorPage() {
         order: newOrder.map((q) => q.id),
       });
       setQuestions(newOrder);
+      void imageLibrary.reload(); // "Used by Q2" numbers follow the order
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to reorder');
     }
@@ -634,6 +761,17 @@ export default function QuestionEditorPage() {
 
       {error && <p className="text-red-400 text-sm">{error}</p>}
 
+      <ImageLibraryPanel
+        library={imageLibrary.library}
+        loading={imageLibrary.loading}
+        error={imageLibrary.error}
+        onUpload={imageLibrary.upload}
+        onReplace={imageLibrary.replace}
+        onSetDescription={imageLibrary.setDescription}
+        onDelete={imageLibrary.remove}
+        refresh={imageLibrary.reload}
+      />
+
       {/* Add question form */}
       {showAddForm && (
         <Card>
@@ -644,6 +782,9 @@ export default function QuestionEditorPage() {
               onSave={(payload) => void addQuestion(payload)}
               onCancel={() => setShowAddForm(false)}
               saving={saving}
+              images={libraryImages}
+              onUpload={imageLibrary.upload}
+              refreshImages={imageLibrary.reload}
             />
           </CardContent>
         </Card>
@@ -668,6 +809,9 @@ export default function QuestionEditorPage() {
                     onSave={(payload) => void updateQuestion(q.id, payload)}
                     onCancel={() => setEditingId(null)}
                     saving={saving}
+                    images={libraryImages}
+                    onUpload={imageLibrary.upload}
+                    refreshImages={imageLibrary.reload}
                   />
                 </CardContent>
               </>
@@ -703,6 +847,16 @@ export default function QuestionEditorPage() {
                     <span className="text-slate-500 text-xs">{q.time_limit_seconds}s · {q.points_value}pts</span>
                   </div>
                   <p className="text-slate-100 text-sm leading-relaxed">{q.prompt}</p>
+                  {promptImageId(q.config as QuestionConfig) !== null && (
+                    <div className="mt-2">
+                      <ListThumb
+                        id={promptImageId(q.config as QuestionConfig)}
+                        images={imagesById}
+                        size="h-16 w-24"
+                        refresh={imageLibrary.reload}
+                      />
+                    </div>
+                  )}
 
                   {q.type === 'multiple_choice' && (
                     <div className="mt-2 space-y-1">
@@ -713,7 +867,16 @@ export default function QuestionEditorPage() {
                             <span className={pts > 0 ? 'text-green-400' : 'text-slate-500'}>
                               {pts > 0 ? '\u2713' : '\u25cb'}
                             </span>
-                            <span className={pts > 0 ? 'text-slate-200' : 'text-slate-400'}>{opt}</span>
+                            <span className="font-mono text-slate-500">{optionLetter(oi)}</span>
+                            <ListThumb
+                              id={optionImageIds(q.config as QuestionConfig)[oi] ?? null}
+                              images={imagesById}
+                              size="h-8 w-8"
+                              refresh={imageLibrary.reload}
+                            />
+                            {hasCaption(opt) && (
+                              <span className={pts > 0 ? 'text-slate-200' : 'text-slate-400'}>{opt}</span>
+                            )}
                             {pts > 0 && <span className="text-slate-500">({pts}pts)</span>}
                           </div>
                         );
@@ -753,7 +916,16 @@ export default function QuestionEditorPage() {
                             <span className={isCorrect ? 'text-green-400' : pts < 0 ? 'text-red-400' : 'text-slate-500'}>
                               {isCorrect ? '\u2713' : pts < 0 ? '\u2212' : '\u25cb'}
                             </span>
-                            <span className={isCorrect ? 'text-slate-200' : 'text-slate-400'}>{opt}</span>
+                            <span className="font-mono text-slate-500">{optionLetter(oi)}</span>
+                            <ListThumb
+                              id={optionImageIds(q.config as QuestionConfig)[oi] ?? null}
+                              images={imagesById}
+                              size="h-8 w-8"
+                              refresh={imageLibrary.reload}
+                            />
+                            {hasCaption(opt) && (
+                              <span className={isCorrect ? 'text-slate-200' : 'text-slate-400'}>{opt}</span>
+                            )}
                             {pts !== 0 && <span className="text-slate-500">({pts > 0 ? '+' : ''}{pts}pts)</span>}
                           </div>
                         );

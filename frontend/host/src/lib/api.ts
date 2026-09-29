@@ -19,7 +19,8 @@ export class ApiError extends Error {
 async function toApiError(res: Response): Promise<ApiError> {
   const body: unknown = await res.json().catch(() => null);
   const err = (body && typeof body === 'object' ? body : {}) as { message?: unknown; detail?: unknown };
-  let message = `HTTP ${res.status}`;
+  // nginx refuses an oversized body with its own HTML page before the backend sees it.
+  let message = res.status === 413 ? 'The file is larger than the server accepts.' : `HTTP ${res.status}`;
   if (typeof err.message === 'string') {
     message = err.message;
   } else if (typeof err.detail === 'string') {
@@ -76,11 +77,14 @@ export const api = {
   patch: <T>(path: string, body?: unknown) =>
     apiFetch<T>(path, { method: 'PATCH', body: body !== undefined ? JSON.stringify(body) : undefined }),
   delete: <T>(path: string) => apiFetch<T>(path, { method: 'DELETE' }),
-  /** POST multipart/form-data (for file uploads). No Content-Type: the browser adds the boundary. */
-  postForm: <T>(path: string, form: FormData) => {
+  /**
+   * Send multipart/form-data (file uploads). No Content-Type: the browser adds the boundary.
+   * `method` is 'PUT' for an image replace.
+   */
+  postForm: <T>(path: string, form: FormData, method: 'POST' | 'PUT' = 'POST') => {
     const token = localStorage.getItem('token');
     return fetch(`${BASE}${path}`, {
-      method: 'POST',
+      method,
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: form,
     }).then(async (res) => {

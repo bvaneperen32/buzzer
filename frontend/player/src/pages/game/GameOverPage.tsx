@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { useGame } from './GameLayout';
 import { Button } from '../../components/ui/button';
+import { choiceLabel } from '../../lib/questionImages';
 import type { PlayerAnswerReveal, QuestionSummaryItem } from '../../types/game';
 
 function describePlayerAnswer(
@@ -12,7 +13,7 @@ function describePlayerAnswer(
   if (type === 'multiple_choice') {
     const idx = playerAnswer.selectedIndex;
     if (typeof idx === 'number' && options && options[idx] !== undefined) {
-      return `${String.fromCharCode(65 + idx)} — ${options[idx]}`;
+      return choiceLabel(idx, options[idx]);
     }
     return '?';
   }
@@ -25,7 +26,7 @@ function describePlayerAnswer(
   if (type === 'multi_select') {
     const indices = playerAnswer.selectedIndices;
     if (!indices || indices.length === 0) return 'No selection';
-    if (options) return indices.map(i => `${String.fromCharCode(65 + i)} — ${options[i]}`).join(', ');
+    if (options) return indices.map(i => choiceLabel(i, options[i])).join(', ');
     return indices.map(i => String.fromCharCode(65 + i)).join(', ');
   }
   return '—';
@@ -38,7 +39,7 @@ function describeCorrectAnswer(
   if (answerReveal.type === 'multiple_choice') {
     const indices = answerReveal.correctIndices;
     if (options) {
-      return indices.map(i => `${String.fromCharCode(65 + i)} — ${options[i]}`).join(', ');
+      return indices.map(i => choiceLabel(i, options[i])).join(', ');
     }
     return indices.map(i => String.fromCharCode(65 + i)).join(', ');
   }
@@ -53,7 +54,7 @@ function describeCorrectAnswer(
     const correct = answerReveal.answerPoints
       .map((p, i) => ({ p, i }))
       .filter(({ p }) => p > 0)
-      .map(({ i }) => options ? `${String.fromCharCode(65 + i)} — ${options[i]}` : String.fromCharCode(65 + i));
+      .map(({ i }) => options ? choiceLabel(i, options[i]) : String.fromCharCode(65 + i));
     return correct.join(', ');
   }
   return '';

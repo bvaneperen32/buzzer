@@ -1,12 +1,27 @@
 import { useEffect, useState } from 'react';
 import { useGame } from './GameLayout';
 import { Button } from '../../components/ui/button';
+import { SafeImage } from '../../components/ui/SafeImage';
+import {
+  hasCaption,
+  imageOptionName,
+  optionImageIds,
+  optionLetter as optionLabel,
+  promptImageId,
+} from '../../lib/questionImages';
 import type { AnswerReveal } from '../../types/game';
+import type { LinkEntry } from '../../types/images';
 
 const RESULTS_DISPLAY_SECONDS = 10;
 
-function optionLabel(i: number): string {
-  return String.fromCharCode(65 + i);
+/** "A  Paris", or the letter alone when the option has no caption (T8 spec §2.11). */
+function choiceLabel(i: number, caption: string | undefined): string {
+  return hasCaption(caption) ? `${optionLabel(i)}  ${caption}` : optionLabel(i);
+}
+
+/** An option's image on the results screen: its link, or none when the map can't resolve it. */
+interface BarImage {
+  link: LinkEntry | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,14 +126,28 @@ function WordCloud({ distribution, answerReveal, totalAnswered, totalPlayers }: 
 // Bar Chart — for multiple_choice and true_false
 // ---------------------------------------------------------------------------
 
-interface BarChartProps {
-  bars: { label: string; count: number; correct: boolean | null }[];
-  totalAnswered: number;
-  totalPlayers: number;
+interface Bar {
+  label: string;
+  count: number;
+  correct: boolean | null;
+  /** Set on choice options, for the richer label that image options get. */
+  index?: number;
+  caption?: string;
+  image?: BarImage | null;
 }
 
-function AnswerBarChart({ bars, totalAnswered, totalPlayers }: BarChartProps) {
+interface BarChartProps {
+  bars: Bar[];
+  totalAnswered: number;
+  totalPlayers: number;
+  refreshImages: () => Promise<void>;
+}
+
+function AnswerBarChart({ bars, totalAnswered, totalPlayers, refreshImages }: BarChartProps) {
   const maxCount = Math.max(...bars.map(b => b.count), 1);
+  // Text-only questions keep today's label; any image option switches every row to
+  // letter + thumbnail + caption.
+  const rich = bars.some(b => b.image);
 
   return (
     <div className="w-full max-w-2xl space-y-3">
@@ -132,10 +161,41 @@ function AnswerBarChart({ bars, totalAnswered, totalPlayers }: BarChartProps) {
             : 'bg-indigo-500';
 
         return (
-          <div key={i} className="flex items-center gap-3">
-            <span className="text-slate-300 font-bold font-mono w-8 text-right shrink-0">
-              {bar.label}
-            </span>
+          <div
+            key={i}
+            className="flex items-center gap-3"
+            aria-label={
+              rich && bar.index !== undefined
+                ? bar.image
+                  ? imageOptionName(bar.index, bar.caption, bar.image.link?.description ?? '')
+                  : bar.label
+                : undefined
+            }
+          >
+            {rich && bar.index !== undefined ? (
+              <span className="flex items-center gap-2 w-60 shrink-0">
+                <span className="text-slate-300 font-bold font-mono w-6 text-right shrink-0">
+                  {optionLabel(bar.index)}
+                </span>
+                {bar.image && (
+                  <SafeImage
+                    src={bar.image.link?.small_url ?? null}
+                    alt={bar.image.link?.description ?? ''}
+                    className="h-12 w-12 shrink-0"
+                    fit="cover"
+                    refresh={refreshImages}
+                    compact
+                  />
+                )}
+                {hasCaption(bar.caption) && (
+                  <span className="text-slate-300 text-sm truncate">{bar.caption}</span>
+                )}
+              </span>
+            ) : (
+              <span className="text-slate-300 font-bold font-mono w-8 text-right shrink-0">
+                {bar.label}
+              </span>
+            )}
             <div className="flex-1 bg-slate-800 rounded-full h-10 overflow-hidden">
               <div
                 className={`h-full rounded-full flex items-center justify-end pr-3 transition-all duration-500 ${barColor}`}
@@ -167,12 +227,20 @@ function buildBars(
   reveal: AnswerReveal,
   distribution: Record<string, number>,
   options: string[] | undefined,
-): BarChartProps['bars'] {
+  imageFor: (i: number) => BarImage | null = () => null,
+): Bar[] {
+  const choice = (opt: string, i: number) => ({
+    label: choiceLabel(i, opt),
+    index: i,
+    caption: opt,
+    image: imageFor(i),
+    count: distribution[String(i)] ?? 0,
+  });
+
   if (reveal.type === 'multiple_choice') {
     const opts = options ?? [];
     return opts.map((opt, i) => ({
-      label: `${optionLabel(i)}  ${opt}`,
-      count: distribution[String(i)] ?? 0,
+      ...choice(opt, i),
       correct: reveal.correctIndices.includes(i),
     }));
   }
@@ -180,8 +248,7 @@ function buildBars(
   if (reveal.type === 'multi_select') {
     const opts = options ?? [];
     return opts.map((opt, i) => ({
-      label: `${optionLabel(i)}  ${opt}`,
-      count: distribution[String(i)] ?? 0,
+      ...choice(opt, i),
       correct: (reveal.answerPoints[i] ?? 0) > 0,
     }));
   }
@@ -195,11 +262,7 @@ function buildBars(
 
   // completeness (non-FITB) — no right/wrong
   if (options && options.length > 0) {
-    return options.map((opt, i) => ({
-      label: `${optionLabel(i)}  ${opt}`,
-      count: distribution[String(i)] ?? 0,
-      correct: null,
-    }));
+    return options.map((opt, i) => ({ ...choice(opt, i), correct: null }));
   }
 
   if ('true' in distribution || 'false' in distribution) {
@@ -217,7 +280,7 @@ function buildBars(
 // ---------------------------------------------------------------------------
 
 export default function ResultsPage() {
-  const { questionResults, currentQuestion, autoAdvance, emitAdvance } = useGame();
+  const { questionResults, currentQuestion, autoAdvance, emitAdvance, imageLinks, refreshImageLinks, imageLinksFailed } = useGame();
   const [countdown, setCountdown] = useState(RESULTS_DISPLAY_SECONDS);
 
   const isLast = currentQuestion
@@ -238,17 +301,33 @@ export default function ResultsPage() {
 
   const isFitb = currentQuestion?.type === 'fill_in_the_blank';
 
+  // Images resolve through the session link map (an id it doesn't have is no image, unless the
+  // map couldn't be fetched at all).
+  const imageFor = (id: number | null): BarImage | null => {
+    if (id === null) return null;
+    const link = imageLinks[String(id)];
+    return link || imageLinksFailed ? { link } : null;
+  };
+  const isChoice =
+    currentQuestion?.type === 'multiple_choice' || currentQuestion?.type === 'multi_select';
+  const optionIds = isChoice ? optionImageIds(currentQuestion?.config) : [];
+  const prompt = imageFor(promptImageId(currentQuestion?.config));
+
   const bars =
     !isFitb && questionResults
       ? buildBars(
           questionResults.answerReveal,
           questionResults.answerDistribution,
           currentQuestion?.config?.options,
+          (i) => imageFor(optionIds[i] ?? null),
         )
       : [];
 
+  const hasImages = !!prompt || bars.some(b => b.image);
+
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-8 gap-8">
+    // With images on screen, the bottom band stays clear for the fixed QR / room-code panel.
+    <div className={`min-h-screen flex flex-col items-center justify-center p-8 gap-8 ${hasImages ? 'pb-48' : ''}`}>
       <h2 className="text-3xl font-bold text-slate-100">
         Question {currentQuestion?.questionNumber} Results
       </h2>
@@ -257,6 +336,19 @@ export default function ResultsPage() {
         <p className="text-slate-300 text-xl text-center max-w-2xl">
           {currentQuestion.prompt}
         </p>
+      )}
+
+      {prompt && (
+        <SafeImage
+          src={prompt.link?.small_url ?? null}
+          alt={prompt.link?.description ?? 'Question image'}
+          className="h-40"
+          style={{
+            aspectRatio: prompt.link ? `${prompt.link.width} / ${prompt.link.height}` : '4 / 3',
+          }}
+          refresh={refreshImageLinks}
+          showRetry
+        />
       )}
 
       {questionResults && isFitb ? (
@@ -271,6 +363,7 @@ export default function ResultsPage() {
           bars={bars}
           totalAnswered={questionResults.totalAnswered}
           totalPlayers={questionResults.totalPlayers}
+          refreshImages={refreshImageLinks}
         />
       ) : null}
 

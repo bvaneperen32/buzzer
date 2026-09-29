@@ -40,7 +40,13 @@ from ..schemas.admin import (
     UserUpdate,
     UserWithAccessResponse,
 )
-from ..services import game_management_service, game_service, roster_service
+from ..services import (
+    bundle_service,
+    game_management_service,
+    game_service,
+    image_service,
+    roster_service,
+)
 from ..services.auth_service import hash_password
 from ..services.export_service import build_canvas_csv, build_session_csv
 from ..services.report_service import build_session_report
@@ -334,8 +340,9 @@ async def import_game(
     admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:
+    raw = await image_service.read_capped(file, bundle_service.IMPORT_LIMIT_BYTES)
     game = await game_management_service.import_game(
-        db, await file.read(), course_id=course_id, creator=admin
+        db, raw, course_id=course_id, creator=admin
     )
     await db.commit()
     return {"game_id": game.id}
@@ -751,7 +758,8 @@ async def session_report(
     session = await db.get(GameSession, session_id)
     if not session:
         raise NotFoundError(f"Session {session_id} not found")
-    filename, content = await build_session_report(db, session_id)
+    # Admins pass the game rule, so the report always embeds the images.
+    filename, content = await build_session_report(db, session_id, include_images=True)
     return Response(
         content=content,
         media_type="text/html",

@@ -12,7 +12,7 @@ itself.
 **Application-level modules**
 
 - `main.py` — assembly. Builds the FastAPI app, registers the rate limiter, CORS, and exception
-  handlers, mounts the five routers under `/api`, and runs `bootstrap_admin()` in the lifespan
+  handlers, mounts the six routers under `/api`, and runs `bootstrap_admin()` in the lifespan
   hook. The final `asgi_app` wraps FastAPI *inside* `socketio.ASGIApp` rather than mounting
   socket.io as a sub-app — Starlette's `Mount` strips the path prefix and breaks socket.io's own
   path matching. Don't "clean this up" into a `Mount`.
@@ -29,17 +29,22 @@ itself.
 
 **Subpackages** — each has its own `CLAUDE.md` with file-level detail and gotchas:
 
-- [`routers/`](routers/CLAUDE.md) — the HTTP API: `health`, `auth`, `game`, `admin`, `host`.
+- [`routers/`](routers/CLAUDE.md) — the HTTP API: `health`, `auth`, `game`, `admin`, `host`, and
+  `images` (signed image links, T8).
 - [`websocket/`](websocket/CLAUDE.md) — the socket.io gateway, event constants, socket auth.
 - [`services/`](services/CLAUDE.md) — all business logic: auth, access rules, game/question
-  authoring, game rules, scoring, Redis state, roster import, exports, HTML reports.
+  authoring, game rules, scoring, Redis state, roster import, exports, HTML reports, and (T8) the
+  game row lock, image references, game bundles, and image processing, libraries and links.
 - [`schemas/`](schemas/CLAUDE.md) — Pydantic request/response contracts.
 - [`models/`](models/CLAUDE.md) — SQLAlchemy ORM models.
 - [`common/`](common/CLAUDE.md) — auth dependencies, error hierarchy, logging, rate limiter.
-- `migrations/` — Alembic env and four revisions (`001` initial schema, `002` answer_data on
+- `migrations/` — Alembic env and five revisions (`001` initial schema, `002` answer_data on
   scores, `003` integer → float points, `004` course-specific games: nullable `games.course_id`
-  and `game_sessions.allow_guests`). No context file; run `alembic upgrade head` from
-  `backend/`. `env.py` reads `DATABASE_URL` from the process environment, not from `settings`.
+  and `game_sessions.allow_guests`, `005` the `images` table: one image library per game, T8). No
+  context file; run `alembic upgrade head` from `backend/`. `env.py` reads `DATABASE_URL` from
+  the process environment, not from `settings`. Round-trip a new migration on a disposable
+  database, never by downgrading the dev one (`docs/plans/t8-image-support.md` §4.12 has the
+  commands).
 
 ## Architecture
 
@@ -68,6 +73,23 @@ vanished `room:{code}` key ends a live game (see "Redis lifecycle").
 `services/auth_service.py`, so `common` is not a leaf. Services must never import
 `common.dependencies`.
 
+**T8's module dependencies** (each arrow means "imports"; nothing may import against them):
+
+```
+image_refs              → (nothing)            schemas.admin also imports it, for the keys
+game_lock               → models, common.exceptions
+bundle_service          → image_refs, common.exceptions
+image_service           → image_refs, bundle_service, game_lock, auth_service, state_service,
+                          models, schemas.image, common.exceptions
+game_management_service → image_refs, bundle_service, image_service, game_lock, game_service
+game_service            → game_lock        (T7 will add image_service)
+report_service          → image_service, image_refs
+websocket/gateway       → image_service
+```
+
+`image_service` and `bundle_service` never import `game_service` or `game_management_service`,
+which keeps T7's future `game_service → image_service` import cycle-free.
+
 ## Cross-cutting invariants
 
 - **Nothing that reveals the answer reaches a client before `QUESTION_RESULTS`.** That is the
@@ -95,6 +117,42 @@ vanished `room:{code}` key ends a live game (see "Redis lifecycle").
   example of what incomplete looks like.
 - **The host drives every state transition.** Players only submit answers; phase changes come from
   `HOST_ADVANCE`. Don't add player-triggered advancement.
+- **The game row lock serializes writes to one game** (T8, `services/game_lock.py`). Every write
+  that can change a game's export (question create/update; title, description, max players;
+  image upload, replace, description edit), every image delete, question reorder, `create_room`
+  and `start_game` first call `lock_game` (`SELECT … FOR UPDATE` on the `games` row). After it,
+  every read that feeds a check, merge, version increment or start is a **fresh read** —
+  `fresh(stmt)`, a locking read with `populate_existing`. A plain read would return the pre-lock
+  REPEATABLE READ snapshot, or an object SQLAlchemy's identity map never refreshes
+  (`expire_on_commit=False`). Take every locking read **before** assigning to any ORM object:
+  `populate_existing` overwrites unflushed changes. Only the game row, the image row being
+  changed and the session being started are locked exclusively; everything else is `FOR SHARE`,
+  so answer inserts (which share-lock question rows) never wait on an edit. Lock timeouts and
+  deadlocks become a 409.
+- **Image references are ids inside `config`** (`prompt_image_id`, `option_images`, `image_id`),
+  defined once in `services/image_refs.py`. Every referenced id must be in the **same game's**
+  library: `image_service.assert_in_library` on every write, under the lock. Every read resolves
+  them scoped to the question's own game, so a missing id and another game's id both count as
+  "no image" — and so does a legacy value planted before T8. Nothing that reads references may
+  raise on a malformed one.
+- **Every game's export stays within 40 MiB, so it re-imports** (the export rule). Covered writes
+  are refused (409) if they'd push the exact export size, measured by `bundle_service` with the
+  exporter's own serializer, past the limit, unless the size didn't grow. A new write path for
+  questions or game metadata must run the same check (`image_service.check_export_change`), and
+  must measure questions **as stored**, read back after the write
+  (`game_management_service._as_stored`): MySQL's `FLOAT` and JSON columns can store a number
+  longer than it was sent. Only strings and integers (metadata, image fields) are exact before
+  they're written.
+- **No image changes version while a session of its game is live** (LOBBY or IN_PROGRESS *and*
+  its Redis room exists). Replace and delete are refused, and `create_room` takes the game lock
+  and commits before responding. Links carry the version and are cached `immutable`, so this is
+  what keeps every link a session received valid for that session.
+- **Don't `ORDER BY` in SQL while selecting question content or image blobs.** MySQL 8 carries
+  the selected columns (`config`, blobs) in its 256 KB sort buffer and fails with error 1038 once
+  one row is bigger. For questions that takes a ~300 KB question, well inside the 1 MiB request
+  limit; one stored image of that size is enough. T8's reads sort by `(order_index, id)` in Python
+  (`image_service.question_order`), and the export's image read by id. The pre-existing
+  game-over summaries in `game_service` still sort in SQL.
 
 ## Adding a question type — the canonical checklist
 
@@ -104,7 +162,11 @@ a plain string, and every client has a silent fallback for an unknown type.
 **Backend**
 
 - `schemas/admin.py` — the type regex in `QuestionCreate` *and* `QuestionUpdate`, plus a branch
-  in `QuestionCreate.validate_structure`.
+  in `QuestionCreate.validate_structure`. **Image references** (T8): its `_validate_image_refs`
+  allows `prompt_image_id` on every type and `option_images` only on `multiple_choice` /
+  `multi_select`, and refuses `image_id` everywhere. A canvas type (T7) must be allowed, and
+  required, to carry `image_id` there. A type whose options can be images must be added to
+  `_IMAGE_OPTION_TYPES` *and* rendered by both apps' option-image code.
 - `services/game_service.py` — `calculate_score`, `record_answer`'s distribution key,
   `get_player_question_summary`'s reveal, and `get_host_question_summary` (twice: its reveal *and*
   its distribution rebuild).

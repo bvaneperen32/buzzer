@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Outlet, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../../lib/api';
+import { referencedImageIds } from '../../lib/questionImages';
+import { useSessionImageLinks } from '../../lib/sessionImages';
 import { QRCodeSVG } from 'qrcode.react';
 import { io, Socket } from 'socket.io-client';
 import type {
@@ -15,6 +17,7 @@ import type {
   QuestionPayload,
   SyncStatePayload,
 } from '../../types/game';
+import type { LinkEntry } from '../../types/images';
 
 // ---------------------------------------------------------------------------
 // Context
@@ -38,6 +41,12 @@ interface GameContextValue {
   setAutoAdvance: (v: boolean) => void;
   emitAdvance: () => void;
   emitLockQuestion: () => void;
+  /** The session link map: every image of the game, by id as a string (T8). */
+  imageLinks: Record<string, LinkEntry>;
+  /** Fetch current links; calls made at the same time share one request. */
+  refreshImageLinks: () => Promise<void>;
+  /** The last link fetch failed (e.g. access lost): show unresolved images as unavailable. */
+  imageLinksFailed: boolean;
 }
 
 const GameContext = createContext<GameContextValue | null>(null);
@@ -72,6 +81,17 @@ export default function GameLayout() {
   const [gameOver, setGameOver] = useState<HostGameOverPayload | null>(null);
   const [autoAdvance, setAutoAdvance] = useState(false);
   const [error, setError] = useState('');
+  const [sessionId, setSessionId] = useState<string | null>(null);
+
+  const {
+    links: imageLinks,
+    refresh: refreshImageLinks,
+    failed: imageLinksFailed,
+  } = useSessionImageLinks(sessionId);
+  // The socket handlers are registered once; they reach the current refresh through a ref.
+  const refreshImageLinksRef = useRef(refreshImageLinks);
+  refreshImageLinksRef.current = refreshImageLinks;
+  const refreshedForQuestion = useRef<number | null>(null);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -80,9 +100,12 @@ export default function GameLayout() {
       return;
     }
 
-    api.get<{ game_title: string }>(`/game/rooms/${code}`)
-      .then(data => setGameTitle(data.game_title))
-      .catch(() => {}); // non-fatal — title stays blank if fetch fails
+    api.get<{ game_title: string; session_id: string }>(`/game/rooms/${code}`)
+      .then(data => {
+        setGameTitle(data.game_title);
+        setSessionId(data.session_id); // starts the session link map fetch
+      })
+      .catch(() => {}); // non-fatal — title stays blank (and images unavailable) if it fails
 
     const sock = io({
       path: '/socket.io',
@@ -91,9 +114,13 @@ export default function GameLayout() {
     });
     socketRef.current = sock;
 
+    let connectedBefore = false;
     sock.on('connect', () => {
       setError('');
       sock.emit('join_room', { room_code: code, role: 'HOST' });
+      // Links may have expired while the socket was down.
+      if (connectedBefore) void refreshImageLinksRef.current();
+      connectedBefore = true;
     });
 
     sock.on('connect_error', (err) => {
@@ -202,6 +229,20 @@ export default function GameLayout() {
     };
   }, [code, navigate]);
 
+  // A question that uses an image the map doesn't have yet (uploaded after the map was fetched)
+  // gets one refresh; an id still missing afterwards is treated as no image.
+  useEffect(() => {
+    if (!currentQuestion || !sessionId) return;
+    if (refreshedForQuestion.current === currentQuestion.questionId) return;
+    const missing = referencedImageIds(currentQuestion.config).some(
+      (id) => !imageLinks[String(id)],
+    );
+    if (missing) {
+      refreshedForQuestion.current = currentQuestion.questionId;
+      void refreshImageLinks();
+    }
+  }, [currentQuestion, sessionId, imageLinks, refreshImageLinks]);
+
   const emitAdvance = useCallback(() => {
     socketRef.current?.emit('host_advance', {});
   }, []);
@@ -227,7 +268,7 @@ export default function GameLayout() {
 
   return (
     <GameContext.Provider
-      value={{ phase, roomCode: code, gameTitle, players, playerCount, currentQuestion, answeredCount, allAnswered, answerPhaseEnded, questionLocked, lockedTimerSeconds, questionResults, gameOver, autoAdvance, setAutoAdvance, emitAdvance, emitLockQuestion }}
+      value={{ phase, roomCode: code, gameTitle, players, playerCount, currentQuestion, answeredCount, allAnswered, answerPhaseEnded, questionLocked, lockedTimerSeconds, questionResults, gameOver, autoAdvance, setAutoAdvance, emitAdvance, emitLockQuestion, imageLinks, refreshImageLinks, imageLinksFailed }}
     >
       <Outlet />
 

@@ -109,6 +109,8 @@ Use `--build` any time you change `requirements.txt` or the `Dockerfile`:
 docker compose up --build
 ```
 
+> **Image support (T8) added Pillow** to `backend/requirements.txt`, so an existing checkout must rebuild the backend image once (`docker compose up --build`) and then apply migration `005` (next step). The same change pins `redis<8`: redis-py 8 caps each connection pool at 100 by default, which a full class answering at once exceeds.
+
 > **First run note:** On initial startup, MySQL takes 30–45 seconds to initialize the database user, and the backend will **wait — logging `admin_bootstrap_waiting_for_schema` every few seconds — until you run the migrations in the next step**, because its startup needs the database schema, which doesn't exist yet. Both behaviors are normal.
 
 ### 6. Run database migrations
@@ -244,6 +246,24 @@ Include timer-expiry edge cases (sets `time_limit_seconds=2` so tests finish qui
 
 ```bash
 python -m pytest tests/integration/ -q --fast
+```
+
+The image tests (`test_t8_images.py`) include **lock tests** that hold a game's row lock from their own MySQL connection, on the published port `3306`, as the backend's account. They read `MYSQL_PASSWORD` from `.env`; override with `BUZZER_TEST_DB_HOST` / `_PORT` / `_NAME` / `_USER` / `_PASSWORD`. If they skip, image verification is incomplete, not passed. Two opt-in modules need extra flags:
+
+```bash
+# Per-route request body limits, through nginx (after npm run build, with the stack up)
+python -m pytest tests/integration/test_t8_nginx_limits.py -q --nginx-url http://localhost:8080
+
+# 150 players fetching option images, plus a burst of large uploads (prints its measurements)
+python -m pytest tests/integration/test_t8_image_load.py -q --image-load -s
+```
+
+### Unit tests
+
+No stack needed. They import the backend as `app`, so put `backend/` on the path:
+
+```bash
+cd tests/unit && PYTHONPATH=../../backend python -m pytest -q
 ```
 
 ### WebSocket smoke test
@@ -393,6 +413,47 @@ The file format is:
 ```
 
 Question order is determined by array position; `order_index` is assigned automatically on import.
+
+**Games with images export as version 2**, which adds the whole image library as base64. Questions refer to images by the bundle's own keys, and import re-derives everything else from the bytes:
+
+```json
+{
+  "format": "buzzer/game",
+  "version": 2,
+  "game": { "title": "...", "description": "...", "max_players": 150 },
+  "images": [
+    { "key": "img-1", "filename": "tower.jpg", "description": "Stone tower on a hill", "data": "<base64>" }
+  ],
+  "questions": [
+    {
+      "type": "multiple_choice", "grading_type": "ACCURACY", "prompt": "Which city is this?",
+      "config": { "prompt_image_id": "img-1", "options": ["Paris", "Rome"], "option_images": [null, null] },
+      "answer_data": { "answer_points": [1, 0] }, "time_limit_seconds": 30, "points_value": 1
+    }
+  ]
+}
+```
+
+A game with no images still exports as version 1, byte for byte as before, and every version 1 file still imports. Each image entry has exactly those four fields. An import is checked in full (count, entries, references, every image through the pipeline, the library budget) before anything is created, and its export size is measured on the game as stored before anything is committed, so a refused import leaves nothing behind. Exporting, importing and exporting again gives identical bytes.
+
+### Images in questions
+
+Every game has its own **image library**, stored in MySQL. Upload, replace, re-describe and delete images from the **Images** panel at the top of a game's question editor, or pick and upload them straight from a question's image pickers. Any question can show an image below its prompt (on the projector only). Multiple-choice and multi-select options can be images, with or without a caption. Every image needs a description, which is its alt text.
+
+Uploads are checked and normalized. PNG, JPEG, WebP and GIF are accepted; anything else, including SVG, is refused. Photos are rotated upright, stripped of metadata, and scaled to at most 1600 px. Phones get a 400 px WebP copy. The limits:
+
+| Limit | Value |
+|---|---|
+| One uploaded or imported image | 10 MiB, 40 megapixels |
+| A stored image | 1600 px on its longest side, 4 MiB |
+| Images per game | 50 |
+| Library budget (stored images) | 24 MiB per game |
+| Export size, and import file size | 40 MiB |
+| Images processed at once | 2, with a 20 s wait for a slot before a 503 |
+
+A write that would push a game's export past 40 MiB is refused, so every game's export re-imports. Images can't be replaced or deleted while a session of the game is live, or deleted while a question uses them. Browsers load images through short-lived signed links (2–3 hours).
+
+**nginx enforces the request body limits per route** (`nginx/nginx.dev.conf`): 11 MiB for image upload and replace, 41 MiB for the two import routes, and nginx's 1 MiB default for everything else. FastAPI reads a whole body before any handler runs, so nginx is the only real size gate. A new route that accepts large bodies needs its own `location` there. Requests sent straight to port 8000 bypass these limits.
 
 ### Export session scores
 

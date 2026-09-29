@@ -9,8 +9,9 @@ class-name merger. There is no socket helper here — the socket lives directly 
 
 - `api.ts` — `apiFetch<T>` plus the `api` object: `get` / `post` / `put` / `patch` / `delete`,
   and two helpers copied from the admin app:
-  - **`postForm(path, formData)`** — multipart upload (game JSON import). It deliberately omits
-    `Content-Type` so the browser supplies the multipart boundary.
+  - **`postForm(path, formData, method = 'POST')`** — multipart upload (game JSON import, image
+    upload; `'PUT'` for an image replace). It deliberately omits `Content-Type` so the browser
+    supplies the multipart boundary.
   - **`download(path)`** — fetches with the bearer header, reads the filename from
     `Content-Disposition`, and saves via a temporary `<a download>`. Used for session reports,
     CSV exports, and game JSON export.
@@ -26,6 +27,20 @@ class-name merger. There is no socket helper here — the socket lives directly 
   `localStorage`, where it would go stale the same way the token's role claim does.
 - `utils.ts` — `cn(...)`, the standard `clsx` + `tailwind-merge` combination used by every UI
   component so caller-supplied classes win over defaults.
+- `imageLibrary.ts` (T8) — `useImageLibrary(gameId)`: the editor's library (images with links and
+  uses, live sessions, meters), with `reload`, `upload`, `replace`, `setDescription`, `remove`.
+  Mutations adopt the returned item at once, then reload. `reload` coalesces simultaneous calls
+  into one request, and a response that started before a write is dropped, so it can't overwrite
+  the adopted item. It reloads again within 10 minutes of the earliest link expiry.
+- `sessionImages.ts` (T8) — `useSessionImageLinks(sessionId)`: the projector's link map, with a
+  coalescing `refresh` and a `failed` flag (the last fetch failed, e.g. a 403 after the host lost
+  the game), and the same expiry refresh.
+- `linkExpiry.ts` — the "within 10 minutes of the earliest `expires_at`" delay both hooks share,
+  never less than 60 s. Each fetch schedules the next, so without that floor a client clock
+  about 2 h fast computes 0 every time and refetches in a tight loop.
+- `questionImages.ts` — reads image ids out of a question's `config` defensively (only a positive
+  integer counts), option letters, "has a caption", and the image options' accessible names.
+- `format.ts` — byte counts and limits in KiB/MiB for the image UI.
 
 ## How it fits in
 
@@ -54,11 +69,14 @@ behind those controls calls an endpoint that enforces `ADMIN` itself.
 - `download` revokes the object URL synchronously right after `a.click()`. That works in current
   browsers because the download is already queued, but it's timing-dependent. Its filename regex
   only matches a quoted `filename="..."` (the backend always quotes).
-- A non-JSON error body (a proxy's HTML 502, say) falls through to `HTTP <status>`.
+- A non-JSON error body (a proxy's HTML 502, say) falls through to `HTTP <status>` — except a 413,
+  which becomes "The file is larger than the server accepts." (nginx's own page for a body over a
+  route's limit). This app's `api.ts` now differs from admin's in that one line.
 - Responses are cast to `T` with no runtime validation, so a backend shape change surfaces as an
   undefined property at render time rather than at the call site.
 - REST responses use **snake_case** (`room_code`, `game_title`, `access_token`) while socket
   payloads use **camelCase**. Both conventions are live in this app; match whichever transport
   you're on.
-- `api.ts` here and admin's are now functionally identical (same verbs, same helper), but they're
-  still two files. A fix in one needs the same fix in the other.
+- `api.ts` here and admin's are the same apart from `postForm`'s method parameter and the 413
+  message (T8, host only: admin has no uploads that large). A fix in one needs the same fix in
+  the other.
