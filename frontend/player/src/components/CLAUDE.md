@@ -17,6 +17,13 @@ set retuned for touch — same API, larger targets.
 - `TimerBar.tsx` — countdown bar. Takes `totalSeconds` and `paused`. Thinner than the host's
   (`h-4` vs `h-6`) with a smaller seconds readout, and the same green → yellow → red thresholds
   at 60% and 30%.
+- `SafeImage.tsx` (T8) — the phone's copy of the host's image component, deliberately simpler:
+  links arrive only in `new_question`, so there's nothing to refresh. On the first error it
+  remounts once with the same link (valid for at least 2 hours after it was sent); on the
+  second, "Image unavailable" with the description. No Retry button. The element stays
+  transparent until it loads, so no broken-image icon. Its retry state is per instance, so
+  `QuestionPage` keys each one by its link: a tile that keeps its position across questions
+  must not inherit the previous image's failure.
 
 ## How it fits in
 

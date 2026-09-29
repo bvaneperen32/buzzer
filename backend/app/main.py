@@ -13,7 +13,7 @@ from .common.logging import configure_logging
 from .common.rate_limit import limiter
 from .config import settings
 from .redis_client import close_redis, get_redis
-from .routers import admin, auth, game, health, host
+from .routers import admin, auth, game, health, host, images
 from .services.bootstrap import bootstrap_admin
 from .websocket.gateway import sio as _ws_server
 
@@ -57,6 +57,7 @@ app.include_router(auth.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
 app.include_router(game.router, prefix="/api")
 app.include_router(host.router, prefix="/api")
+app.include_router(images.router, prefix="/api")
 
 # Wrap FastAPI with the socketio ASGI app.
 # Requests to /socket.io/* are handled by python-socketio; everything else

@@ -29,7 +29,7 @@ from ..database import AsyncSessionLocal
 from ..models.game import Question
 from ..models.session import GameSession
 from ..redis_client import get_redis
-from ..services import game_service
+from ..services import game_service, image_service
 from ..services import state_service as state
 from ..services.auth_service import get_user_by_id
 from . import events as E
@@ -102,8 +102,13 @@ def _user_room(user_id: str) -> str:
     return f"user:{user_id}"
 
 
-def _question_payload(q: Question, number: int, total: int) -> dict:
-    """Build the client-safe NEW_QUESTION payload (no answer_data)."""
+async def _question_payload(db, q: Question, number: int, total: int) -> dict:
+    """Build the client-safe NEW_QUESTION payload (no answer_data).
+
+    `images` carries small links for the question's option images only (T8): it goes to
+    every phone, and phones never get prompt or canvas images. `config` passes through
+    unchanged, so a phone treats an option id missing from `images` as no image.
+    """
     payload: dict = {
         "questionId": q.id,
         "type": q.type,
@@ -118,6 +123,9 @@ def _question_payload(q: Question, number: int, total: int) -> dict:
     }
     if q.type == "fill_in_the_blank":
         payload["editDistance"] = q.answer_data.get("editDistance", 0)
+    payload["images"] = await image_service.question_player_images(
+        db, q, datetime.now(timezone.utc)
+    )
     return payload
 
 
@@ -128,8 +136,8 @@ async def _host_question_payload(db, current_q: dict | None) -> dict | None:
     question = await db.get(Question, current_q["question_id"])
     if not question:
         return None
-    payload = _question_payload(
-        question, current_q["question_number"], current_q["total_questions"]
+    payload = await _question_payload(
+        db, question, current_q["question_number"], current_q["total_questions"]
     )
     payload["startedAt"] = current_q[
         "started_at"
@@ -648,7 +656,8 @@ async def on_join_room(sid: str, data: dict) -> None:
                         (datetime.now(timezone.utc) - started_at).total_seconds()
                     )
                     remaining = max(5, current_q["time_limit_seconds"] - elapsed)
-                    payload = _question_payload(
+                    payload = await _question_payload(
+                        db,
                         question,
                         current_q["question_number"],
                         current_q["total_questions"],
@@ -951,6 +960,12 @@ async def _on_host_advance_impl(sid: str) -> None:
                 except Exception as exc:
                     await _emit_error(sid, str(exc))
                     return
+                if questions is None:
+                    # A concurrent Start (a double click) won the game lock and started the
+                    # game; this advance read the lobby phase before that. Ignore it: no
+                    # second start, no error.
+                    logger.info("host_advance_already_started", session_id=session_id)
+                    return
                 question_ids = [q.id for q in questions]
                 room_state["question_ids"] = question_ids
                 next_index = 0
@@ -1040,7 +1055,9 @@ async def _on_host_advance_impl(sid: str) -> None:
                 len(question_ids),
             )
 
-            payload = _question_payload(question, next_index + 1, len(question_ids))
+            payload = await _question_payload(
+                db, question, next_index + 1, len(question_ids)
+            )
             _t_emit = datetime.now(timezone.utc)
             await sio.emit(E.NEW_QUESTION, payload, to=room_code)
 

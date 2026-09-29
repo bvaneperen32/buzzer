@@ -18,14 +18,16 @@ controller, not a display — it can submit answers but never advances the game.
   `-webkit-tap-highlight-color: transparent` to kill the mobile tap flash.
 - `types/game.ts` — socket payload types: `SyncStatePayload`, `QuestionPayload`,
   `AnswerResultPayload`, `PlayerResultsPayload`, `PlayerGameOverPayload`, the
-  `PlayerAnswerReveal` union, and `PlayerPhase`. Hand-maintained.
+  `PlayerAnswerReveal` union, and `PlayerPhase`, plus `QuestionConfig` (T8's `prompt_image_id` /
+  `option_images`) and `QuestionPayload.images` (small links for option images). Hand-maintained.
 
 **Subdirectories** — each has its own `CLAUDE.md`:
 
 - [`pages/`](pages/CLAUDE.md) — join/identity flow and the five in-game screens, plus
   `GameLayout`.
-- [`components/`](components/CLAUDE.md) — touch-tuned `Button`, `Card`, `Input`, `TimerBar`.
-- [`lib/`](lib/CLAUDE.md) — REST client, `cn`, and `isTokenExpired`.
+- [`components/`](components/CLAUDE.md) — touch-tuned `Button`, `Card`, `Input`, `TimerBar`,
+  `SafeImage`.
+- [`lib/`](lib/CLAUDE.md) — REST client, `cn`, `isTokenExpired`, and `questionImages` (T8).
 
 ## Architecture
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Annotated
 
 import structlog
@@ -9,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..common.dependencies import get_current_user, require_user
-from ..common.exceptions import NotFoundError
+from ..common.exceptions import ForbiddenError, NotFoundError
 from ..config import settings
 from ..database import get_db
 from ..models.course import Course, UserCourseAccess
@@ -25,7 +26,8 @@ from ..schemas.game import (
     RoomCreateResponse,
     RoomInfoResponse,
 )
-from ..services import game_service
+from ..schemas.image import SessionImages
+from ..services import game_service, image_service
 from ..services import state_service as state
 
 router = APIRouter(prefix="/game", tags=["game"])
@@ -189,6 +191,10 @@ async def create_room(
         max_rooms=settings.MAX_ROOMS,
         allow_guests=body.allow_guests,
     )
+    # Commit before responding (T8): the host only receives a room code once the session is
+    # visible to the image live guard, and the game row lock create_room took is released
+    # promptly rather than after the response.
+    await db.commit()
     return {"room_code": session.room_code, "session_id": session.id}
 
 
@@ -238,6 +244,29 @@ async def get_room(
         "course_semester": course.semester if course else "",
         "question_count": question_count,
     }
+
+
+@router.get("/sessions/{session_id}/images", response_model=SessionImages)
+async def session_images(
+    session_id: str,
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SessionImages:
+    """The projector's link map (T8): full and small links for every image of the session's
+    game. Needs both the session-host check and the current game rule —
+    user_can_host_session alone checks only HOST on the course the session ran in, so a
+    host who lost the game grant, or whose game moved course, would still get links."""
+    session = await db.get(GameSession, session_id)
+    if not session:
+        raise NotFoundError(f"Session {session_id} not found")
+    if not (
+        await game_service.user_can_host_session(db, user, session)
+        and await game_service.user_can_use_game(db, user, session.game_id)
+    ):
+        raise ForbiddenError("You do not have access to this session's images")
+    # Doesn't depend on the Redis room: a projector refreshed late on the game-over screen
+    # still gets links, and anyone passing both checks could read the library anyway.
+    return await image_service.session_links(db, session, datetime.now(timezone.utc))
 
 
 # ---------------------------------------------------------------------------

@@ -37,7 +37,11 @@ and presentation.
   select (move, after a native `confirm()`) and a Delete behind a two-step inline confirm, both
   on `/api/admin/*`. Hosts get no delete.
 - `QuestionEditorPage.tsx` — per-type question authoring, reorder, delete, and JSON export, over
-  `/api/host/games/{id}/…`. A port of the admin editor with the same form logic.
+  `/api/host/games/{id}/…`. A port of the admin editor with the same form logic. T8: the Images
+  panel sits above the question list (`useImageLibrary`); the form has an image picker for the
+  prompt (every type) and one per multiple-choice and multi-select option row; the list shows a
+  prompt thumbnail and each choice option as letter, thumbnail, caption. After any question
+  change the library reloads, because uses, question numbers and the export meter follow it.
 - `RostersPage.tsx` — `my-courses` as a list of links to each course's roster.
 - `RosterPage.tsx` — roster list plus the **CSV column-mapping wizard**: client-side RFC-4180
   parser, header auto-detection, per-column transforms (strip `@domain`, reverse
@@ -54,14 +58,20 @@ and presentation.
   `<Outlet />` plus a persistent QR + room-code panel. Also drives routing: incoming events
   navigate between the child routes.
 - `game/LobbyPage.tsx` — pre-game screen: large QR code and room code, live player count, the
-  auto-advance toggle, and Start Game.
+  auto-advance toggle, and Start Game. The typed-join hint shows `<address>/player`, without the
+  trailing slash, and nginx returns 404 for that path. The QR code's link works. *Noted, not
+  scheduled*; see [frontend/CLAUDE.md](../../../CLAUDE.md).
 - `game/QuestionPage.tsx` — live question: metadata line, `TimerBar`, prompt, answered counter,
   and the Lock / Show Results buttons. The prompt is hidden while the question is locked (see
-  Gotchas).
+  Gotchas). T8: the prompt image below the prompt (about 55% of the viewport; it stays up when
+  the question locks), and for multiple choice / multi-select with any image option a lettered
+  grid of full images with captions. Text-only questions still show no options here — phones
+  have them.
 - `game/ResultsPage.tsx` — per-question results. Bar chart for choice-style questions, word cloud
-  for fill-in-the-blank, and the auto-advance countdown.
+  for fill-in-the-blank, and the auto-advance countdown. T8: a prompt thumbnail, and bar labels
+  of letter + thumbnail + caption once any option has an image.
 - `game/GameOverPage.tsx` — final screen: score histogram, summary stats, and a per-question
-  breakdown card list.
+  breakdown card list. T8: each card shows the prompt thumbnail and option thumbnails.
 
 ## How it fits in
 
@@ -71,7 +81,12 @@ Two halves with different shapes:
   opens only there). `GameLayout` is the only stateful piece; the four `game/*` pages are
   presentational views over `useGame()` and emit exactly two actions (`emitAdvance`,
   `emitLockQuestion`). Adding host state means adding it to the context, not to a child page. The
-  socket is the transport; REST only fetches the game title.
+  socket is the transport; REST fetches the game title and session id, and (T8) the session's
+  image links: `GameLayout` holds `useSessionImageLinks(sessionId)` and exposes `imageLinks`,
+  `refreshImageLinks` and `imageLinksFailed`. It refreshes them after a socket reconnect and once
+  per question that uses an id the map doesn't have. An id still missing after that is no image;
+  if the map itself couldn't be fetched (a lost game grant), images show as unavailable
+  instead.
 - **Management pages** (inside `HostShell`). REST-only and built like the admin app's pages:
   each owns its own `useState`, runs `load()` on mount, and after a mutation calls `await load()`
   again. `useMe()` gives the role, for display only. They call `/api/host/*` and
@@ -113,6 +128,12 @@ but `sync_state` carries no results or game-over data, so recovery after a refre
   array instead of `correctIndices` and lets clients mark each option with `points > 0`.
   Hand-built JSON that sets `points_value` independently will break both the reveal display and
   `is_correct`.
+- **Option rows with images** (T8): when any option row of a multiple-choice or multi-select
+  question has an image, `formToPayload` first drops rows with neither text nor image, and derives
+  `options`, `option_images`, `answer_points` and `points_value` from that one filtered list, so a
+  leftover blank row can't block saving. With no image, both types behave exactly as before
+  (including the flaw below). `option_images` is sent only when some option has an image, and
+  `prompt_image_id` only when set, so text-only payloads are unchanged.
 - One flaw in that derivation: for `multi_select` and `fill_in_the_blank`, `formToPayload` drops
   rows with blank text from the saved options/answers but computes `points_value` over *all*
   rows. A blank row that still carries points inflates `points_value` above anything an answer
@@ -161,6 +182,10 @@ but `sync_state` carries no results or game-over data, so recovery after a refre
   <h2>…}`). The server auto-locks 0.5s after the timer expires, and also when the host
   disconnects, so the projector loses the question text at exactly the moment the room is
   discussing it. It may be deliberate, but nothing in the code says so.
+- **Image layouts keep clear of the fixed QR / room-code panel.** On `QuestionPage` the image area
+  is `22rem` narrower than the viewport (the panel's width, twice, since it's centred) and sized to
+  fit one screen (a 28vh prompt image plus 20vh option images when both are shown);
+  `ResultsPage` keeps a bottom band (`pb-48`). Text-only questions keep their old layout.
 - **The QR code and room code render twice on the lobby.** `GameLayout` draws a fixed
   bottom-right join panel on *every* child route, and `LobbyPage` draws its own large QR and code
   in the page body. On the lobby screen both are visible at once.

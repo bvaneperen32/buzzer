@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The HTTP API. Five `APIRouter`s, all mounted under `/api` by [main.py](../main.py). These handle
+The HTTP API. Six `APIRouter`s, all mounted under `/api` by [main.py](../main.py). These handle
 authentication, administration, host-side management (games, questions, rosters, session
 downloads), room setup, and health — everything *except* live gameplay, which goes over
 [websocket/](../websocket/CLAUDE.md).
@@ -21,8 +21,14 @@ downloads), room setup, and health — everything *except* live gameplay, which 
   create/info/ping, session delete, guest listing and merging, and CSV export. `my-courses` lists
   only courses the user HOSTs (every course for admins); `my-games` only games with a game grant
   on a course they HOST (every game, unassigned included, for admins); `my-active-sessions` only
-  rooms the socket would let them rejoin as HOST. Room create takes `allow_guests`. Session delete
-  and the raw CSV export go through `game_service`'s session-host check.
+  rooms the socket would let them rejoin as HOST. Room create takes `allow_guests`, and
+  **commits before responding** (T8), so a room is visible to the image live guard before its
+  code is returned and the game row lock it took is released promptly. Session delete and the
+  raw CSV export go through `game_service`'s session-host check.
+  `GET /sessions/{id}/images` (T8) is the projector's image link map: it needs **both**
+  `user_can_host_session` and the *current* game rule (`user_can_use_game`), because the
+  session check alone ignores the game grant. It doesn't depend on the Redis room, so a
+  projector refreshed on the game-over screen still gets links.
 - `admin.py` — `/api/admin/*`, ~760 lines, every endpoint behind `require_admin`. CRUD for
   courses, users, and access grants; guest merge; session listing; any-status score/report
   downloads. Its game, question, and roster endpoints are thin wrappers over
@@ -32,10 +38,24 @@ downloads), room setup, and health — everything *except* live gameplay, which 
   users who don't HOST the new course; `POST /users/{id}/game-access` returns 409 unless the game
   has a course and the user HOSTs it.
 - `host.py` — `/api/host/*`: host management for the courses a user HOSTs. Game
-  create/import/edit/export, question CRUD and reorder, roster list/import/patch, and the session
-  list with COMPLETED-session report and CSV downloads. Every endpoint is `require_user` plus a
-  `game_service` course, game, or download assertion; those let `ADMIN` through, so admins do host
-  work here too. There is deliberately no game delete (405) — that stays admin-only.
+  create/import/edit/export, question CRUD and reorder, roster list/import/patch, the session
+  list with COMPLETED-session report and CSV downloads, and (T8) a game's image library:
+  `GET/POST /games/{id}/images`, `PUT/PATCH/DELETE /games/{id}/images/{image_id}` (list,
+  upload, replace, description, delete). An image of another game is a 404. Upload runs, in
+  order: the game rule, `clean_description`, the advisory `precheck_library`, `process_upload`
+  (processing slot, capped read, pipeline), the locked `image_service` write, then an explicit
+  `commit` before the response. Every endpoint is `require_user` plus a `game_service` course,
+  game, or download assertion; those let `ADMIN` through, so admins do host work here too. There
+  is deliberately no game delete (405) — that stays admin-only.
+- `images.py` — `GET /api/images/{id}/v{version}/{full|small}?t=…` (T8): serves image bytes
+  through signed links. **No auth dependency** — the signed `t` is the whole check (an `<img>`
+  can't send a bearer header). A bad, expired or mismatched token → 403; a missing image or a
+  superseded version → 404; never 401. Success carries the stored content type (WebP for
+  `small`), `nosniff`, `Content-Disposition: inline` with no filename, and
+  `Cache-Control: private, max-age=<until expiry>, immutable`. Errors carry no caching headers,
+  so a retry after a failure really re-requests. It **commits before returning**, so the pooled
+  connection is released before the body goes out; left to `get_db`, every slow phone download
+  would hold one of the connections answer handling needs.
 
 ## How it fits in
 
@@ -103,7 +123,13 @@ gets its own endpoints in `host.py`, and both call the same service functions.
 - **Only admins move a game between courses.** The host `PUT /games/{id}` takes `GameUpdate`
   (`extra="forbid"`), so a `course_id` there is a 422; the admin `PUT` takes `AdminGameUpdate`,
   which can set or change a course but never clear it.
-- `POST /api/host/games/import` checks course access *before* reading the uploaded file.
+- `POST /api/host/games/import` checks course access *before* reading the uploaded file. Both
+  import endpoints read it with `image_service.read_capped` (40 MiB import limit), which bounds
+  only the handler's own copy — FastAPI has already received the whole body, so nginx's
+  per-route limit is the real gate (see [backend/CLAUDE.md](../../CLAUDE.md)).
+- **Report images follow the game rule, not the download rule** (T8). The host report endpoint
+  passes `include_images=user_can_use_game(...)`, so a host who has lost the game still gets the
+  report's text but not its (current) images; the admin endpoint passes `True`.
 - **Downloads through `host.py` and `game.py` require a COMPLETED session for every role**,
   admins included. A non-owner gets the 403 first, so the status isn't revealed to them. The admin
   router's own `/sessions/{id}/export` and `/report` stay any-status: they're the only way to fetch

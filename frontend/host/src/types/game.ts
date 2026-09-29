@@ -1,3 +1,23 @@
+/**
+ * A question's `config`, as stored (snake_case keys pass through the socket unchanged).
+ * Image references are image ids; one that isn't in the game's library is treated as no image.
+ */
+export interface QuestionConfig {
+  options?: string[];
+  maxLength?: number;
+  prompt_image_id?: number | null;
+  /** Parallel to `options`: an image id per option, or null. */
+  option_images?: (number | null)[] | null;
+}
+
+/** One entry of `new_question`'s `images` map: a small link and the full image's size. */
+export interface OptionImageLink {
+  url: string;
+  width: number;
+  height: number;
+  description: string;
+}
+
 export interface PlayerInfo {
   userId: string;
   displayName: string;
@@ -31,11 +51,16 @@ export interface QuestionPayload {
   type: 'multiple_choice' | 'true_false' | 'fill_in_the_blank' | 'multi_select';
   gradingType: 'ACCURACY' | 'COMPLETENESS';
   prompt: string;
-  config: { options?: string[]; maxLength?: number };
+  config: QuestionConfig;
   timeLimitSeconds: number;
   pointsValue: number;
   editDistance?: number;
   startedAt?: string;  // ISO timestamp — only present in sync_state reconnect payloads
+  /**
+   * Small links for the question's option images, keyed by image id as a string (T8). The
+   * projector doesn't use it: it resolves every image through the session link map instead.
+   */
+  images?: Record<string, OptionImageLink>;
 }
 
 export interface AnswerStatusPayload {
@@ -82,7 +107,7 @@ export interface HostQuestionSummaryItem {
   prompt: string;
   type: 'multiple_choice' | 'true_false' | 'fill_in_the_blank' | 'multi_select';
   gradingType: 'ACCURACY' | 'COMPLETENESS';
-  config: { options?: string[]; maxLength?: number };
+  config: QuestionConfig;
   pointsValue: number;
   answerReveal: AnswerReveal;
   answerDistribution: Record<string, number>;

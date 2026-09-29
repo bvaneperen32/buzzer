@@ -10,8 +10,16 @@ every game rule. The clients display state; this decides it.
 
 - [`app/`](app/CLAUDE.md) — the application. Routers, WebSocket gateway, services, schemas,
   models, and shared infrastructure, each with its own `CLAUDE.md`.
-- `requirements.txt` — pinned loosely by lower bound. Note `bcrypt<4.0`, which is a **deliberate
-  pin**: passlib 1.7.x misdetects bcrypt 4.x as broken. Don't bump it without upgrading passlib.
+- `requirements.txt` — pinned loosely by lower bound, with two **deliberate upper pins**:
+  - `bcrypt<4.0`: passlib 1.7.x misdetects bcrypt 4.x as broken. Don't bump it without upgrading
+    passlib.
+  - `redis<8`: redis-py 8 caps each asyncio connection pool at 100 by default (every earlier
+    release allowed 2³¹) and fails fast when it's exhausted. The gateway uses a connection per
+    concurrent handler, so 150 players answering at once raised `MaxConnectionsError` and lost
+    answers and advances. Lift the pin only after sizing the pool in `app/redis_client.py`.
+
+  `Pillow` (T8 images) is a real dependency, not a dev tool. Adding it means rebuilding the
+  image, and a loose lower bound means a rebuild can upgrade anything else, as it did redis-py.
 - `Dockerfile` — `python:3.12-slim` plus the build deps `asyncmy` and `cryptography` need. It
   has **no `CMD`**; the run command comes from `docker-compose.yml`.
 - `alembic.ini` — `script_location = app/migrations`. `sqlalchemy.url` is intentionally blank;
@@ -112,6 +120,17 @@ normal `complete_game`), and fill-in-the-blank answer distributions use raw play
 fields, so cardinality is unbounded. `appendonly yes` means Redis survives a restart, but
 eviction is silent. MySQL remains correct either way.
 
+### Request body size is only enforced by nginx
+
+FastAPI reads a whole request body — spooling multipart files to disk, parsing JSON into
+memory — **before** any dependency or handler runs, so `require_user` can't stop a large body
+from being received. nginx's per-route `client_max_body_size` (`nginx/nginx.dev.conf`) is the
+real gate: 11 MiB on image upload/replace, 41 MiB on the two import routes, the 1 MiB default
+everywhere else. **A new route that accepts large bodies needs its own nginx `location`,**
+otherwise it keeps the 1 MiB default. Requests straight to port 8000 (the Vite dev proxy, the
+integration suite, the published port) have no limit at all. `image_service.read_capped` only
+bounds the handler's own copy.
+
 ### Dev and production diverge substantially
 
 `APP_ENV` and `STRESS_TEST_KEY` change real behavior, and compose hardcodes
@@ -129,6 +148,9 @@ and a verbose-logging switch.
 
 ### Data model
 
+- **Images live in MySQL** since migration `005` (`images`, one library per game; T8). The blob
+  columns are `MEDIUMBLOB` and deferred. See [app/CLAUDE.md](app/CLAUDE.md) for the lock and
+  reference invariants that come with them.
 - **Points are floats** since migration `003`, but integer assumptions remain (the host's
   `maxPossibleScore` is `int()`-truncated; some annotations still say `int`). Two question types
   compare `is_correct` by exact float equality.

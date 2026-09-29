@@ -126,6 +126,24 @@ def create_temp_token(user_id: str) -> str:
     return _make_token(user_id, "temp", timedelta(minutes=15))
 
 
+def create_image_token(image_id: int, version: int, variant: str, exp: datetime) -> str:
+    """A signed link token for one image version and variant ("full" or "small").
+
+    No `sub` and no `iat`: identical inputs give an identical token (RS256 signing is
+    deterministic), so a link stays the same URL for its whole expiry bucket and browsers can
+    reuse the cached bytes. `get_current_user` and `authenticate_socket` accept only access and
+    temp tokens, so this token can't authenticate anything else.
+    """
+    payload = {
+        "token_type": "image",
+        "img": image_id,
+        "v": version,
+        "var": variant,
+        "exp": exp,
+    }
+    return jwt.encode(payload, _private_key(), algorithm="RS256")
+
+
 # ---------------------------------------------------------------------------
 # Token verification
 # ---------------------------------------------------------------------------

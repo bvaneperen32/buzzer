@@ -45,6 +45,32 @@ class UnprocessableError(BuzzerError):
         super().__init__("UNPROCESSABLE", message, status.HTTP_422_UNPROCESSABLE_ENTITY)
 
 
+class PayloadTooLargeError(BuzzerError):
+    """A 413 raised by the application's own size checks. nginx's per-route body limits
+    produce their own 413 page before a request reaches the backend."""
+
+    def __init__(self, message: str = "The file is too large"):
+        super().__init__(
+            "PAYLOAD_TOO_LARGE", message, status.HTTP_413_CONTENT_TOO_LARGE
+        )
+
+
+class UnsupportedMediaTypeError(BuzzerError):
+    def __init__(self, message: str = "Unsupported media type"):
+        super().__init__(
+            "UNSUPPORTED_MEDIA_TYPE", message, status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
+        )
+
+
+class ServiceUnavailableError(BuzzerError):
+    """A 503 for work refused because capacity is exhausted (image processing slots)."""
+
+    def __init__(self, message: str = "Service unavailable"):
+        super().__init__(
+            "SERVICE_UNAVAILABLE", message, status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(BuzzerError)
     async def buzzer_error_handler(request: Request, exc: BuzzerError) -> JSONResponse:
