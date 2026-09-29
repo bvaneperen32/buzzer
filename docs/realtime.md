@@ -45,6 +45,15 @@ socket.emit("submit_answer", {
 
 Meanwhile every player who *didn't* answer receives nothing — their screens change only when the host advances and the server broadcasts `question_results` and then the next `new_question` to the whole room.
 
+## Images: links, not bytes
+
+Questions can show images (T8), but **no image bytes travel over the socket**. Browsers load images from signed, expiring links — `/api/images/{id}/v{version}/{full|small}?t={token}` — which need no bearer token (an `<img>` element can't send one). The server creates them only where access has already been checked. Each screen gets only the links for what it shows:
+
+- **Phones** get them inside `new_question`: an `images` map, `{"<image id>": {url, width, height, description}}`, holding **small links for option images only** (`{}` when there are none). It is built by `_question_payload` from the question's `config`, one query scoped to the question's own game. Prompt images never reach phones. `config` itself passes through unchanged, so a phone treats an option id missing from `images` as having no image. A reconnecting player who hasn't answered gets the late-join `new_question` with the same map. `question_results`, `game_over` and the player's `sync_state` carry no new fields.
+- **The projector** gets its links over REST, not the socket: `GET /api/game/sessions/{session_id}/images` returns full and small links for every image of the session's game. Access needs both the session-host check and the host's current access to the game itself. The host app fetches it once `GET /api/game/rooms/{code}` gives it the session id, again after a socket reconnect, when a question uses an id the map lacks, when an image fails to load, and before the links expire.
+
+A link stays the same URL for its whole hour, so browsers reuse cached bytes across the question, results and game-over screens. No image can change version while a session is live: replace and delete are refused, and room creation is serialized with them under the game row lock. So a link a session received is never stale for that session.
+
 ## The full event vocabulary
 
 Client → server: `join_room`, `rejoin_room`, `submit_answer`, and host-only `host_advance`, `host_lock_question`.

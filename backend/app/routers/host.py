@@ -15,6 +15,7 @@ DELETE /api/game/sessions/{id}).
 from __future__ import annotations
 
 import io
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
@@ -26,6 +27,7 @@ from ..database import get_db
 from ..models.course import CourseRoster
 from ..models.game import Game, Question
 from ..models.user import User
+from ..redis_client import get_redis
 from ..schemas.admin import (
     AdminSessionItem,
     GameCreateRequest,
@@ -40,7 +42,14 @@ from ..schemas.admin import (
     RosterImportPayload,
     RosterUploadResult,
 )
-from ..services import game_management_service, game_service, roster_service
+from ..schemas.image import DescriptionPatch, ImageItem, LibraryResponse
+from ..services import (
+    bundle_service,
+    game_management_service,
+    game_service,
+    image_service,
+    roster_service,
+)
 from ..services.export_service import build_canvas_csv, build_session_csv
 from ..services.report_service import build_session_report
 
@@ -75,8 +84,9 @@ async def import_game(
 ) -> dict:
     # Access first: the file isn't read or parsed for a course the user can't use.
     await game_service.assert_host_can_use_course(db, user, course_id)
+    raw = await image_service.read_capped(file, bundle_service.IMPORT_LIMIT_BYTES)
     game = await game_management_service.import_game(
-        db, await file.read(), course_id=course_id, creator=user
+        db, raw, course_id=course_id, creator=user
     )
     await db.commit()
     return {"game_id": game.id}
@@ -184,6 +194,105 @@ async def export_game(
 
 
 # ---------------------------------------------------------------------------
+# Image library (T8). Every endpoint applies the game rule; an image of another
+# game is a 404. The writes commit before responding, so a commit failure is an
+# error response rather than arriving after a success.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/games/{game_id}/images", response_model=LibraryResponse)
+async def list_images(
+    game_id: int,
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis=Depends(get_redis),
+) -> LibraryResponse:
+    await game_service.assert_host_can_use_game(db, user, game_id)
+    return await image_service.list_library(
+        db, redis, game_id, datetime.now(timezone.utc)
+    )
+
+
+@router.post("/games/{game_id}/images", response_model=ImageItem, status_code=201)
+async def upload_image(
+    game_id: int,
+    file: Annotated[UploadFile, File(description="PNG, JPEG, WebP or GIF image")],
+    description: Annotated[str, Form(description="What the image shows (alt text)")],
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ImageItem:
+    # FastAPI has already received the body (nginx limits its size); nothing below reads
+    # the spooled file until access and the cheap checks have passed.
+    await game_service.assert_host_can_use_game(db, user, game_id)
+    cleaned = image_service.clean_description(description)
+    await image_service.precheck_library(db, game_id)
+    processed = await image_service.process_upload(file)
+    image = await image_service.add_image(
+        db, game_id, processed, image_service.clean_filename(file.filename), cleaned
+    )
+    await db.commit()
+    return await image_service.library_item(
+        db, game_id, image, datetime.now(timezone.utc)
+    )
+
+
+@router.put("/games/{game_id}/images/{image_id}", response_model=ImageItem)
+async def replace_image(
+    game_id: int,
+    image_id: int,
+    file: Annotated[UploadFile, File(description="PNG, JPEG, WebP or GIF image")],
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis=Depends(get_redis),
+) -> ImageItem:
+    await game_service.assert_host_can_use_game(db, user, game_id)
+    processed = await image_service.process_upload(file)
+    image = await image_service.replace_image(
+        db,
+        redis,
+        game_id,
+        image_id,
+        processed,
+        image_service.clean_filename(file.filename),
+    )
+    await db.commit()
+    return await image_service.library_item(
+        db, game_id, image, datetime.now(timezone.utc)
+    )
+
+
+@router.patch("/games/{game_id}/images/{image_id}", response_model=ImageItem)
+async def edit_image_description(
+    game_id: int,
+    image_id: int,
+    body: DescriptionPatch,
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ImageItem:
+    await game_service.assert_host_can_use_game(db, user, game_id)
+    image = await image_service.set_description(
+        db, game_id, image_id, image_service.clean_description(body.description)
+    )
+    await db.commit()
+    return await image_service.library_item(
+        db, game_id, image, datetime.now(timezone.utc)
+    )
+
+
+@router.delete("/games/{game_id}/images/{image_id}", status_code=204)
+async def delete_image(
+    game_id: int,
+    image_id: int,
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    redis=Depends(get_redis),
+) -> None:
+    await game_service.assert_host_can_use_game(db, user, game_id)
+    await image_service.delete_image(db, redis, game_id, image_id)
+    await db.commit()
+
+
+# ---------------------------------------------------------------------------
 # Roster
 # ---------------------------------------------------------------------------
 
@@ -254,8 +363,14 @@ async def session_report(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
     """Download a completed session's standalone HTML report."""
-    await game_service.assert_can_download_session(db, user, session_id)
-    filename, content = await build_session_report(db, session_id)
+    session = await game_service.assert_can_download_session(db, user, session_id)
+    # Downloading needs only the session check, but the report shows the game's *current*
+    # images: embed them only for someone who still passes the game rule (T8 spec §2.14).
+    filename, content = await build_session_report(
+        db,
+        session_id,
+        include_images=await game_service.user_can_use_game(db, user, session.game_id),
+    )
     return Response(
         content=content,
         media_type="text/html",

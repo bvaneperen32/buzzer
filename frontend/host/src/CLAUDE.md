@@ -24,16 +24,21 @@ results, for the courses they HOST. Admins use them too.
   assumes.
 - `types/game.ts` — every socket payload and shared type: `SyncStatePayload`, `QuestionPayload`,
   `HostResultsPayload`, `HostGameOverPayload`, the `AnswerReveal` discriminated union, and
-  `HostPhase`. Hand-maintained to match the backend; nothing generates it.
+  `HostPhase`, plus `QuestionConfig` (with T8's `prompt_image_id` / `option_images`) and the
+  `images` map on `QuestionPayload`. Hand-maintained to match the backend; nothing generates it.
+- `types/images.ts` — T8's REST types (`ImageItem`, `LibraryResponse`, `LinkEntry`, …, mirroring
+  the backend's `schemas/image.py`) and the input and import limits the UI checks before
+  uploading.
 
 **Subdirectories** — each has its own `CLAUDE.md`:
 
 - [`pages/`](pages/CLAUDE.md) — all screens: `HostShell` and the management pages, plus
   `GameLayout`, which owns the socket and all game state, and its game screens.
-- [`components/`](components/CLAUDE.md) — presentational primitives (`Button`, `Card`, `Input`)
-  and `TimerBar`.
+- [`components/`](components/CLAUDE.md) — presentational primitives (`Button`, `Card`, `Input`,
+  `SafeImage`), `TimerBar`, and the editor's image components (`images/`).
 - [`lib/`](lib/CLAUDE.md) — the REST client (with `ApiError`, uploads, and downloads), the
-  in-memory current-user context (`useMe`), and the `cn` class-name helper.
+  in-memory current-user context (`useMe`), the `cn` class-name helper, and T8's image hooks and
+  helpers (`useImageLibrary`, `useSessionImageLinks`, `questionImages`, `format`).
 
 ## Architecture
 

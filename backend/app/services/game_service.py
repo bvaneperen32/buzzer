@@ -18,6 +18,7 @@ from ..models.session import GameSession, SessionScore
 from ..models.user import User
 from ..schemas.game import ScoreResult
 from . import state_service as state
+from .game_lock import fresh, lock_game
 
 logger = structlog.get_logger()
 
@@ -73,30 +74,40 @@ async def assert_host_can_use_course(
         raise ForbiddenError("You do not have HOST access to this course")
 
 
-async def assert_host_can_use_game(db: AsyncSession, user: User, game_id: int) -> Game:
+async def user_can_use_game(db: AsyncSession, user: User, game_id: int) -> bool:
     """
-    The game rule, for running a game and for editing it. Admin can use any game;
-    USER needs HOST on the game's course *and* a user_game_access grant, so an
-    unassigned game (course_id NULL) is off-limits to every non-admin.
-    Non-admins get the same 403 whether or not the game exists.
+    The game rule as a predicate, without raising: ADMIN (for an existing game), or
+    HOST on the game's course *and* a user_game_access grant. An unassigned game
+    (course_id NULL) passes for no non-admin.
     """
     game = await db.get(Game, game_id)
+    if not game:
+        return False
     if user.role == "ADMIN":
-        if not game:
-            raise NotFoundError(f"Game {game_id} not found")
-        return game
-
-    if not game or game.course_id is None:
-        raise ForbiddenError("You do not have access to this game")
+        return True
+    if game.course_id is None:
+        return False
     grant = await db.execute(
         select(UserGameAccess).where(
             UserGameAccess.user_id == user.id,
             UserGameAccess.game_id == game_id,
         )
     )
-    if not grant.scalar_one_or_none() or not await has_host_grant(
+    return grant.scalar_one_or_none() is not None and await has_host_grant(
         db, user.id, game.course_id
-    ):
+    )
+
+
+async def assert_host_can_use_game(db: AsyncSession, user: User, game_id: int) -> Game:
+    """
+    The game rule, for running a game and for editing it (see user_can_use_game).
+    Admins get a 404 for a missing game; non-admins get the same 403 whether or not
+    the game exists.
+    """
+    game = await db.get(Game, game_id)
+    if user.role == "ADMIN" and not game:
+        raise NotFoundError(f"Game {game_id} not found")
+    if not await user_can_use_game(db, user, game_id):
         raise ForbiddenError("You do not have access to this game")
     return game
 
@@ -295,7 +306,12 @@ async def create_room(
 ) -> GameSession:
     # Validate access
     await assert_host_can_use_course(db, host, course_id)
-    game = await assert_host_can_use_game(db, host, game_id)
+    await assert_host_can_use_game(db, host, game_id)
+    # The game row lock serializes room creation with image replace and delete (and with
+    # T7's confirmation checks, which go right after the course check): a replace either
+    # commits before this room exists or sees it live and is refused. It also refreshes the
+    # Game the access check loaded, so a course move committed while we waited is seen.
+    game = await lock_game(db, game_id)
     # Applies to admins too — so an unassigned game can't run until it's assigned.
     if game.course_id != course_id:
         raise ConflictError("This game belongs to a different course")
@@ -381,17 +397,32 @@ async def get_session_by_code(
 
 async def start_game(
     db: AsyncSession, redis: Redis, session: GameSession
-) -> list[Question]:
-    """Transition LOBBY → IN_PROGRESS. Returns ordered question list."""
+) -> list[Question] | None:
+    """Transition LOBBY → IN_PROGRESS. Returns the ordered question list, or None when a
+    concurrent Start already moved the session to IN_PROGRESS ("already started"), which
+    the caller ignores."""
+    # Serialized with image and question writes and room creation for this game. The
+    # reads after the lock are fresh: a plain read would reuse the snapshot taken before
+    # the wait, or return the session object the caller loaded earlier, unrefreshed.
+    await lock_game(db, session.game_id)
+    session = (
+        await db.execute(
+            fresh(
+                select(GameSession).where(GameSession.id == session.id), exclusive=True
+            )
+        )
+    ).scalar_one()
+    if session.status == "IN_PROGRESS":
+        return None
     if session.status != "LOBBY":
         raise ConflictError(f"Cannot start a game in '{session.status}' state")
 
+    # Sorted in Python, not by SQL: MySQL's sort fails for a question row over its 256 KB sort
+    # buffer (T8 spec §4.6). (order_index, id) is the editor's order.
     result = await db.execute(
-        select(Question)
-        .where(Question.game_id == session.game_id)
-        .order_by(Question.order_index)
+        fresh(select(Question).where(Question.game_id == session.game_id))
     )
-    questions = result.scalars().all()
+    questions = sorted(result.scalars().all(), key=lambda q: (q.order_index, q.id))
     if not questions:
         raise ConflictError(
             "This game has no questions — add questions before starting"

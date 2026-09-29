@@ -95,6 +95,13 @@ The `config.py` default omits `:5174`, so the player socket works in dev only if
   for routine rejections too, so a player whose tap lands just after the question auto-locks
   ("Question is locked") is ejected from the game. Separate recoverable errors before building on
   this.
+- **Images arrive as server-issued links, never built by a client** (T8). A link is a
+  root-relative `/api/images/{id}/v{version}/{full|small}?t=…`, signed and valid for 2–3 hours,
+  loaded by a plain `<img>` with no bearer token. The host gets them from REST (the editor's
+  library list; the projector's session link map, `GET /api/game/sessions/{id}/images`); phones
+  get small links for option images inside `new_question` (`images`). An image id a screen
+  can't resolve means "no image" — show the letter and caption, never a broken icon. Question
+  `config` carries the ids (`prompt_image_id`, `option_images`) in snake_case on both transports.
 - Styling is Tailwind with hardcoded slate/indigo colours, dark-only, no theme layer.
 
 ## Gotchas
@@ -102,7 +109,9 @@ The `config.py` default omits `:5174`, so the player socket works in dev only if
 ### Duplication is the defining structural fact
 
 `Button`, `Card`, `Input`, `cn`, `api.ts`, and `TimerBar` exist in **three separate copies**, and
-they have already drifted:
+they have already drifted. T8 adds two more copied pieces, in host and player only: `SafeImage`
+(host: refreshes links and offers Retry; player: one same-link retry, no button — deliberate) and
+`lib/questionImages.ts` (reading image ids out of `config`, the option labels):
 
 - Admin's `Button` / `Card` / `Input` / `utils.ts` are **byte-identical** to host's.
 - Player's are the same API deliberately **retuned for touch** (larger padding, `active:scale-95`,
@@ -133,6 +142,10 @@ and player `LoginPage`s, which still reads only `detail`. *Noted, not scheduled.
 - **Question types** — adding one touches the host (game screens *and* the question editor) and
   the player, each switching on type in several files. The one checklist is in the backend's
   [app/CLAUDE.md](../backend/app/CLAUDE.md).
+- **Option labels** — every screen keeps its own format (host results `A  Paris`, host game over
+  `A.` then the caption, phone `A — Paris`, report `A Paris` with an EN SPACE), and since T8 all
+  of them show the letter alone when the caption is empty. Change a format in one place and the
+  others stay as they are.
 - **Levenshtein distance** — three implementations: `rapidfuzz` in `game_service`, a hand-rolled
   one in `report_service`, and a third in host's `ResultsPage`. `rapidfuzz` decides the score; the
   other two decide what is *shown* as correct (the report's and the host's word clouds), so a
@@ -162,6 +175,14 @@ and player `LoginPage`s, which still reads only `detail`. *Noted, not scheduled.
   *Noted, not scheduled.*
 - `StrictMode` double-invokes effects in dev, so sockets connect twice and `load()` runs twice.
   Expected.
+- **Typing an app's address can fail under nginx** (`nginx/nginx.dev.conf`, found during T8's
+  phone check). These are two separate follow-ups, *noted, not scheduled*; detail is in
+  `docs/plans/t8-image-support.md` §5.
+  - `/player`, `/host` and `/admin` without the trailing slash return 404, yet the host lobby tells
+    players to type `<address>/player`.
+  - The bare `http://<address>:8080/` redirects to port 80 (`http://<address>/player/`), because
+    nginx builds the redirect from its own container port.
+  - The QR code works, because it links to `/player/join?code=…`.
 - Gitignored build artifacts (`vite.config.js`, `tailwind.config.js`, `*.d.ts`, `*.tsbuildinfo`)
   sit beside their `.ts` sources in all three apps, emitted by `tsc -b`. Always edit the `.ts` —
   but **Vite 5 loads `vite.config.js` before `vite.config.ts`, and Tailwind 3 loads

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ..database import Base
 
 if TYPE_CHECKING:
+    from .image import Image
     from .session import GameSession, SessionScore
     from .user import User, UserGameAccess
 
@@ -29,17 +30,29 @@ class Game(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
+    # passive_deletes: the database's ON DELETE CASCADE removes the questions. Loading them
+    # first (ordered) to delete them one by one fails in MySQL's sort for a large question.
     questions: Mapped[list[Question]] = relationship(
         "Question",
         back_populates="game",
         cascade="all, delete-orphan",
         order_by="Question.order_index",
+        passive_deletes=True,
     )
     sessions: Mapped[list[GameSession]] = relationship(
         "GameSession", back_populates="game"
     )
     user_access: Mapped[list[UserGameAccess]] = relationship(
         "UserGameAccess", back_populates="game", cascade="all, delete-orphan"
+    )
+    # passive_deletes: deleting a game leaves its images to the database's ON DELETE CASCADE,
+    # so SQLAlchemy never loads them (or their blobs) just to delete them.
+    images: Mapped[list[Image]] = relationship(
+        "Image",
+        back_populates="game",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="Image.id",
     )
 
 

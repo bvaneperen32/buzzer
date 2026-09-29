@@ -1,4 +1,5 @@
 import { useGame } from './GameLayout';
+import { choiceLabel } from '../../lib/questionImages';
 
 function describeAnswer(
   lastAnswerData: Record<string, unknown> | null,
@@ -9,7 +10,7 @@ function describeAnswer(
   if (type === 'multiple_choice') {
     const idx = lastAnswerData.selectedIndex;
     if (typeof idx === 'number' && options && options[idx] !== undefined) {
-      return `${String.fromCharCode(65 + idx)} — ${options[idx]}`;
+      return choiceLabel(idx, options[idx]);
     }
   }
   if (type === 'true_false') {

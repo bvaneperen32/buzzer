@@ -1,6 +1,9 @@
 import { useRef, useState, useCallback } from 'react';
 import { useGame } from './GameLayout';
+import { SafeImage } from '../../components/ui/SafeImage';
 import { TimerBar } from '../../components/ui/TimerBar';
+import { hasCaption, imageOptionName, optionImageLinks } from '../../lib/questionImages';
+import type { OptionImageLink } from '../../types/game';
 
 const OPTION_COLORS = [
   'bg-red-600 hover:bg-red-500 border-red-500',
@@ -15,6 +18,57 @@ const OPTION_COLORS = [
 
 function optionLabel(i: number): string {
   return String.fromCharCode(65 + i); // A, B, C, … Z
+}
+
+/**
+ * Image options as 2-column tiles (T8): a letter badge, the small image, and the caption if any.
+ * An option without an image (or whose id wasn't in `images`) is a text-only tile. Tapping works
+ * exactly as with text options; a failed image never blocks it — the letter is always there.
+ */
+function OptionTiles({
+  options,
+  links,
+  disabled,
+  tileClass,
+  badge,
+  onTap,
+  pressed,
+}: {
+  options: string[];
+  links: (OptionImageLink | null)[];
+  disabled: boolean;
+  tileClass: (i: number) => string;
+  badge: (i: number) => string;
+  onTap: (i: number) => void;
+  pressed?: (i: number) => boolean;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      {options.map((opt, i) => {
+        const link = links[i];
+        return (
+          <button
+            key={i}
+            disabled={disabled}
+            onClick={() => onTap(i)}
+            aria-label={link ? imageOptionName(i, opt, link.description) : undefined}
+            aria-pressed={pressed ? pressed(i) : undefined}
+            className={`flex flex-col overflow-hidden rounded-2xl border-2 text-left font-semibold transition-all
+              ${disabled ? 'opacity-50 cursor-not-allowed' : 'active:scale-95'}
+              ${tileClass(i)}`}
+          >
+            <span className="flex items-center gap-2 px-3 py-2">
+              <span className="text-xl font-black w-7 shrink-0">{badge(i)}</span>
+              {hasCaption(opt) && <span className="text-base leading-tight line-clamp-2">{opt}</span>}
+            </span>
+            {link && (
+              <SafeImage key={link.url} src={link.url} alt={link.description} className="aspect-square w-full rounded-none" />
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function QuestionPage() {
@@ -61,13 +115,23 @@ export default function QuestionPage() {
 
   if (currentQuestion.type === 'multiple_choice') {
     const options = currentQuestion.config.options ?? [];
+    const links = optionImageLinks(currentQuestion);
     return (
       <div className="py-6 px-4 flex flex-col gap-3">
         <div className="pb-2">
           {questionLabel}
           <TimerBar key={currentQuestion.questionId} totalSeconds={currentQuestion.timeLimitSeconds} paused={questionLocked} />
         </div>
-        {options.map((opt, i) => (
+        {links.some(Boolean) ? (
+          <OptionTiles
+            options={options}
+            links={links}
+            disabled={submitted || questionLocked}
+            tileClass={(i) => `text-white ${OPTION_COLORS[i % OPTION_COLORS.length]}`}
+            badge={optionLabel}
+            onTap={(i) => submit({ selectedIndex: i })}
+          />
+        ) : options.map((opt, i) => (
           <button
             key={i}
             disabled={submitted || questionLocked}
@@ -164,6 +228,7 @@ export default function QuestionPage() {
 
   if (currentQuestion.type === 'multi_select') {
     const options = currentQuestion.config.options ?? [];
+    const links = optionImageLinks(currentQuestion);
     return (
       <div className="py-6 px-4 flex flex-col gap-3">
         <div className="pb-2">
@@ -171,7 +236,21 @@ export default function QuestionPage() {
           <TimerBar key={currentQuestion.questionId} totalSeconds={currentQuestion.timeLimitSeconds} paused={questionLocked} />
         </div>
         <p className="text-center text-slate-400 text-sm">Select all that apply</p>
-        {options.map((opt, i) => {
+        {links.some(Boolean) ? (
+          <OptionTiles
+            options={options}
+            links={links}
+            disabled={submitted || questionLocked}
+            tileClass={(i) =>
+              selectedIndices.has(i)
+                ? 'bg-indigo-600 border-indigo-400 text-white'
+                : 'bg-slate-700 border-slate-600 text-slate-200'
+            }
+            badge={(i) => (selectedIndices.has(i) ? '✓' : optionLabel(i))}
+            onTap={toggleIndex}
+            pressed={(i) => selectedIndices.has(i)}
+          />
+        ) : options.map((opt, i) => {
           const isSelected = selectedIndices.has(i);
           return (
             <button
