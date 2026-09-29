@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, List, Upload, Trash2, Pencil } from 'lucide-react';
 import { api } from '../lib/api';
+import { formatLimit } from '../lib/format';
 import { useMe } from '../lib/me';
+import { IMPORT_LIMIT_BYTES } from '../types/images';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader } from '../components/ui/card';
 import { Input } from '../components/ui/input';
@@ -148,6 +150,12 @@ export default function GamesPage() {
   async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
+    // Refuse early, naming the limit, instead of sending it for nginx to refuse (T8).
+    if (file.size > IMPORT_LIMIT_BYTES) {
+      setError(`That file is larger than the ${formatLimit(IMPORT_LIMIT_BYTES)} import limit.`);
+      if (fileRef.current) fileRef.current.value = '';
+      return;
+    }
     setImporting(true);
     setError('');
     try {

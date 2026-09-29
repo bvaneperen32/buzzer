@@ -5,6 +5,12 @@ Produces a self-contained HTML file with aggregate statistics only —
 no player names, no individual scores, no personally identifiable information.
 Answer distributions are reconstructed from session_scores.answer_data in MySQL
 (Redis may have expired for completed sessions).
+
+T8: images appear as embedded small copies (data URIs, `alt` = the description) — prompt
+images on any type, and option images beside multiple-choice bars and in the multi-select
+option list — but only when `include_images` says the downloader passes the game rule now.
+The report is rebuilt from current content, so an image replaced after the session carries a
+note saying players saw an earlier version.
 """
 
 from __future__ import annotations
@@ -19,7 +25,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.course import Course
 from ..models.game import Game, Question
+from ..models.image import Image
 from ..models.session import GameSession, SessionScore
+from . import image_service
+from .image_refs import OPTION, PROMPT, image_refs
+
+WITHHELD_TEXT = "[image withheld — you no longer have access to this game]"
+REPLACED_NOTE = "Replaced after this session — players saw an earlier version."
 
 
 # ---------------------------------------------------------------------------
@@ -130,18 +142,140 @@ def _build_histogram(scores: list[float], max_possible: float) -> list[dict]:
 # HTML rendering helpers
 # ---------------------------------------------------------------------------
 
-_OPTION_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+# Between an option's letter and its caption, as the report has always rendered it.
+_LABEL_SEPARATOR = "\u2002"  # EN SPACE
+
+
+class _Images:
+    """The images one report embeds: the session's game only, with their small copies when
+    the downloader may see them (a withheld image still counts as present)."""
+
+    def __init__(
+        self, by_id: dict[int, Image], include: bool, session_created_at: object
+    ) -> None:
+        self.by_id = by_id
+        self.include = include
+        self.session_created_at = session_created_at
+
+    def for_question(self, q: Question) -> tuple[Image | None, dict[int, Image]]:
+        """(prompt image, {option index: image}). Unresolved references are no image."""
+        prompt, options = None, {}
+        for ref in image_refs(q.config):
+            image = self.by_id.get(ref.image_id)
+            if image is None:
+                continue
+            if ref.role == PROMPT:
+                prompt = image
+            elif ref.role == OPTION:
+                options[ref.option_index] = image
+        return prompt, options
+
+    def replaced(self, image: Image) -> bool:
+        # Both from the database's NOW(): a replace committed just before the room was
+        # created never produces the note.
+        return bool(
+            image.replaced_at
+            and self.session_created_at
+            and image.replaced_at > self.session_created_at
+        )
+
+    def img(self, image: Image, css_class: str) -> str:
+        if not self.include:
+            return f'<span class="img-withheld">{_esc(WITHHELD_TEXT)}</span>'
+        return (
+            f'<img class="{css_class}" src="{image_service.data_uri(image, "small")}" '
+            f'alt="{_esc(image.description)}">'
+        )
+
+
+def _caption(opt: object) -> str:
+    return "" if opt is None else str(opt)
+
+
+def _option_label(index: int, opt: object) -> str:
+    """The letter, then the caption when it isn't empty (T8 spec §2.11)."""
+    letter = image_service.option_letter(index)
+    caption = _caption(opt)
+    return f"{letter}{_LABEL_SEPARATOR}{_esc(caption)}" if caption.strip() else letter
+
+
+def _rich_option_label(
+    index: int, opt: object, image: Image | None, images: _Images
+) -> str:
+    letter = image_service.option_letter(index)
+    caption = _caption(opt)
+    parts = [f'<span class="opt-letter">{letter}</span>']
+    if image is not None:
+        parts.append(images.img(image, "opt-thumb"))
+    if caption.strip():
+        parts.append(f'<span class="opt-caption">{_esc(caption)}</span>')
+    return "".join(parts)
+
+
+def _replaced_notes(option_images: dict[int, Image], images: _Images) -> str:
+    if not images.include:
+        return ""
+    return "".join(
+        f'<p class="img-note">Option {image_service.option_letter(index)}: '
+        f"{_esc(REPLACED_NOTE)}</p>"
+        for index, image in sorted(option_images.items())
+        if images.replaced(image)
+    )
+
+
+def _render_prompt_image(image: Image | None, images: _Images) -> str:
+    if image is None:
+        return ""
+    if not images.include:
+        return f'<p class="img-withheld q-image">{_esc(WITHHELD_TEXT)}</p>'
+    note = (
+        f'<figcaption class="img-note">{_esc(REPLACED_NOTE)}</figcaption>'
+        if images.replaced(image)
+        else ""
+    )
+    return f'<figure class="q-image">{images.img(image, "prompt-img")}{note}</figure>'
+
+
+def _render_option_list(
+    q: Question, option_images: dict[int, Image], images: _Images
+) -> str:
+    """multi_select: each option's label, with its thumbnail when it has an image. No counts
+    and no correctness — the report has no multi-select distribution chart."""
+    options = q.config.get("options", [])
+    if not isinstance(options, list) or not options:
+        return ""
+    rows = [
+        f'<li class="opt-row">{_rich_option_label(i, opt, option_images.get(i), images)}</li>'
+        for i, opt in enumerate(options)
+    ]
+    return (
+        '<ul class="opt-list">'
+        + "".join(rows)
+        + "</ul>"
+        + _replaced_notes(option_images, images)
+    )
 
 
 def _render_bar_chart(
-    q: Question, dist: dict[str, int], reveal: dict, total_players: int
+    q: Question,
+    dist: dict[str, int],
+    reveal: dict,
+    total_players: int,
+    option_images: dict[int, Image] | None = None,
+    images: _Images | None = None,
 ) -> str:
     options = q.config.get("options", [])
+    option_images = option_images or {}
 
     if q.type == "multiple_choice":
         bars = [
             {
-                "label": f"{_OPTION_LETTERS[i]} {_esc(opt)}",
+                "label": (
+                    _rich_option_label(i, opt, option_images[i], images)
+                    if images is not None and i in option_images
+                    else _option_label(i, opt)
+                ),
+                "rich": images is not None and i in option_images,
                 "count": dist.get(str(i), 0),
                 "correct": (i in reveal.get("correctIndices", []))
                 if reveal.get("type") == "multiple_choice"
@@ -183,9 +317,10 @@ def _render_bar_chart(
         count_inner = (
             f'<span class="bar-count">{bar["count"]}</span>' if bar["count"] > 0 else ""
         )
+        label_class = "bar-label bar-label-rich" if bar.get("rich") else "bar-label"
         rows.append(
             f'<div class="bar-row">'
-            f'<span class="bar-label">{bar["label"]}</span>'
+            f'<span class="{label_class}">{bar["label"]}</span>'
             f'<div class="bar-track">'
             f'<div class="bar-fill" style="width:{display_pct}%;background:{fill_col}">{count_inner}</div>'
             f"</div>"
@@ -193,7 +328,8 @@ def _render_bar_chart(
             f"</div>"
         )
 
-    return '<div class="bar-chart">' + "".join(rows) + "</div>"
+    notes = _replaced_notes(option_images, images) if images is not None else ""
+    return '<div class="bar-chart">' + "".join(rows) + "</div>" + notes
 
 
 def _render_word_cloud(q: Question, dist: dict[str, int], reveal: dict) -> str:
@@ -330,6 +466,18 @@ body{
 .bar-count{font-size:0.85rem;font-weight:700;color:#fff}
 .bar-correct-mark{font-size:0.72rem;color:#4ade80;font-weight:700;width:68px;flex-shrink:0}
 
+/* ── Images (T8) ── */
+.q-image{margin:-12px 0 24px;text-align:center}
+.prompt-img{display:block;margin:0 auto;max-width:100%;max-height:340px;border-radius:12px}
+.bar-label-rich{white-space:normal;display:flex;align-items:center;gap:8px;overflow:visible}
+.opt-letter{font-weight:700;color:#e2e8f0}
+.opt-thumb{width:44px;height:44px;object-fit:cover;border-radius:6px;flex-shrink:0}
+.opt-caption{overflow:hidden;text-overflow:ellipsis}
+.opt-list{list-style:none;display:flex;flex-direction:column;gap:8px}
+.opt-row{display:flex;align-items:center;gap:10px;background:#0f172a;border-radius:8px;padding:8px 12px;color:#cbd5e1}
+.img-note{font-size:0.75rem;color:#fbbf24;margin-top:6px}
+.img-withheld{font-size:0.8rem;color:#94a3b8;font-style:italic}
+
 /* ── Word cloud ── */
 .wc-answer-note{text-align:center;color:#64748b;font-size:0.88rem;margin-bottom:14px}
 .wc-answer{color:#4ade80;font-weight:700}
@@ -377,10 +525,15 @@ body{
 # ---------------------------------------------------------------------------
 
 
-async def build_session_report(db: AsyncSession, session_id: str) -> tuple[str, bytes]:
+async def build_session_report(
+    db: AsyncSession, session_id: str, *, include_images: bool
+) -> tuple[str, bytes]:
     """
     Return (filename, html_bytes) for a standalone session report.
     Aggregate statistics only — no player names or individual scores.
+
+    `include_images`: whether the downloader passes the game rule for the session's game
+    now (admins always do). Otherwise each image is replaced by the withheld text.
     """
     session = await db.get(GameSession, session_id)
     if not session:
@@ -389,12 +542,24 @@ async def build_session_report(db: AsyncSession, session_id: str) -> tuple[str, 
     game = await db.get(Game, session.game_id)
     course = await db.get(Course, session.course_id)
 
+    # Sorted in Python: MySQL's sort fails for a question row over its sort buffer.
     q_result = await db.execute(
-        select(Question)
-        .where(Question.game_id == session.game_id)
-        .order_by(Question.order_index)
+        select(Question).where(Question.game_id == session.game_id)
     )
-    questions = q_result.scalars().all()
+    questions = sorted(q_result.scalars().all(), key=image_service.question_order)
+
+    # One query for every referenced image, scoped to the session's game (so another
+    # game's id is unresolved), with small copies only when they'll be embedded.
+    images = _Images(
+        await image_service.images_for_refs(
+            db,
+            session.game_id,
+            {ref.image_id for q in questions for ref in image_refs(q.config)},
+            with_small=include_images,
+        ),
+        include_images,
+        session.created_at,
+    )
 
     s_result = await db.execute(
         select(SessionScore).where(SessionScore.session_id == session_id)
@@ -449,10 +614,15 @@ async def build_session_report(db: AsyncSession, session_id: str) -> tuple[str, 
         pts_val = f"{q.points_value:g}"
         pts_label = f"{pts_val} pt{'s' if q.points_value != 1 else ''}"
 
+        prompt_image, option_images = images.for_question(q)
         if q.type in ("multiple_choice", "true_false"):
-            chart = _render_bar_chart(q, dict(dist), reveal, total_players)
+            chart = _render_bar_chart(
+                q, dict(dist), reveal, total_players, option_images, images
+            )
         elif q.type == "fill_in_the_blank":
             chart = _render_word_cloud(q, dict(dist), reveal)
+        elif q.type == "multi_select":
+            chart = _render_option_list(q, option_images, images)
         else:
             chart = ""
 
@@ -477,6 +647,7 @@ async def build_session_report(db: AsyncSession, session_id: str) -> tuple[str, 
             f'<span class="q-timing">{q.time_limit_seconds}s · {_esc(pts_label)}</span>'
             f"</div>"
             f'<p class="prompt">{q.prompt}</p>'
+            f"{_render_prompt_image(prompt_image, images)}"
             f"{chart}"
             f"{stats}"
             f"</div>"

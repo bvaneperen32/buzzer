@@ -22,6 +22,12 @@ out.
   defines `QuestionPublic`, a question view without `answer_data` or `grading_type` — but
   **nothing uses it**. Live question payloads are hand-built dicts in `websocket/gateway.py`
   (`_question_payload`), which do send `gradingType`. Don't count `QuestionPublic` as a safeguard.
+- `image.py` — T8's contracts: `ImageItem` (an image with its links and `used_by`), `UsedBy`,
+  `LiveSessionItem`, `LibraryMeters`, `LibraryResponse` (the editor's Images panel), `LinkEntry`
+  and `SessionImages` (the projector's link map), `DescriptionPatch`, and `BundleImage`: the
+  strict shape of one version 2 bundle image (exactly `key`, `filename`, `description`, `data`;
+  `extra="forbid"`, `strict=True`). Timestamps are pre-formatted strings (UTC, `Z`, whole
+  seconds) built by `image_service.utc_z`, not `datetime`s.
 - `admin.py` — the authoring contract, by far the largest file: courses, roster
   import/patch, games, questions, local user accounts, access grants, and the admin session
   list. `QuestionCreate.validate_structure` is where the per-question-type JSON shape is actually
@@ -51,6 +57,14 @@ by hand (see [websocket/CLAUDE.md](../websocket/CLAUDE.md)).
 
 ## Gotchas
 
+- **Image references are validated here for shape only** (T8, `_validate_image_refs`, called from
+  `validate_structure`): `prompt_image_id` is a positive int (not a bool) on any type;
+  `option_images`, only on `multiple_choice`/`multi_select`, has one entry per option, each a
+  positive int or null, with every option a string and blank only if it has an image; and a
+  non-null `image_id` is refused on every current type (T7 opens it for its canvas type). When
+  `option_images` is absent or null, options are checked exactly as before T8. Whether the ids
+  are in the game's library is checked in `image_service`, under the game lock. The key names
+  come from `services/image_refs.py` (which imports nothing), not string literals.
 - **`QuestionUpdate` itself only applies per-field constraints** — the structural check lives in
   the service. `game_management_service.update_question` overlays the sent fields on the stored
   question and validates the result with `QuestionCreate` (see

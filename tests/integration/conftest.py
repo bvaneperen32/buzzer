@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import subprocess
 import time
 import logging
@@ -57,6 +58,73 @@ def pytest_addoption(parser):
         default=False,
         help="Set time_limit_seconds=2 on all questions (enables timer-expiry tests)",
     )
+    parser.addoption(
+        "--nginx-url",
+        default=None,
+        help="nginx base URL, e.g. http://localhost:8080 (enables test_t8_nginx_limits.py)",
+    )
+    parser.addoption(
+        "--image-load",
+        action="store_true",
+        default=False,
+        help="Run the opt-in T8 image load and burst checks (test_t8_image_load.py)",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+
+def read_repo_env() -> dict[str, str]:
+    """KEY=VALUE pairs from the repo's .env (empty when it doesn't exist)."""
+    env_path = _REPO_ROOT / ".env"
+    env_vars: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                env_vars[k.strip()] = v.strip()
+    return env_vars
+
+
+def wait_until(check, *, timeout: float = 5.0, what: str = "the write"):
+    """Poll check() until it returns something truthy, and return that. Fails the test if
+    the state never shows up. (Same helper as test_t4_access.py's: get_db commits many
+    writes after responding, so a read right after a 2xx can still see the old state.)"""
+    deadline = time.monotonic() + timeout
+    while True:
+        result = check()
+        if result:
+            return result
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"Timed out after {timeout}s waiting for {what}")
+        time.sleep(0.1)
+
+
+def redis_cli(*args: str, timeout: float = 20.0) -> str:
+    """Run a redis-cli command against the stack's Redis, which publishes no port.
+
+    Uses BUZZER_TEST_REDIS_CLI (default `docker compose exec -T redis redis-cli`) from the repo
+    root. Raises RuntimeError if the command can't run, so callers can skip with the reason.
+    """
+    base = shlex.split(
+        os.environ.get("BUZZER_TEST_REDIS_CLI", "docker compose exec -T redis redis-cli")
+    )
+    try:
+        result = subprocess.run(
+            [*base, *args],
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"redis-cli could not run: {exc}") from exc
+    if result.returncode != 0:
+        raise RuntimeError(f"redis-cli failed: {result.stderr.strip() or result.stdout.strip()}")
+    return result.stdout.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -137,14 +205,7 @@ def admin_token(docker_stack, base_url: str) -> str:
     Log in as the admin user and return an access token.
     Credentials are read from the .env file (ADMIN_USERNAME / ADMIN_PASSWORD).
     """
-    env_path = _REPO_ROOT / ".env"
-    env_vars: dict[str, str] = {}
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                env_vars[k.strip()] = v.strip()
+    env_vars = read_repo_env()
 
     username = env_vars.get("ADMIN_USERNAME") or os.environ.get("ADMIN_USERNAME", "admin")
     password = env_vars.get("ADMIN_PASSWORD") or os.environ.get("ADMIN_PASSWORD", "changeme123")

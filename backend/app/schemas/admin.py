@@ -11,6 +11,8 @@ from pydantic import (
     model_validator,
 )
 
+from ..services.image_refs import CANVAS_KEY, OPTIONS_KEY, PROMPT_KEY, is_image_id
+
 
 # ---------------------------------------------------------------------------
 # Courses
@@ -194,7 +196,58 @@ class QuestionCreate(BaseModel):
                     )
                 if any(not isinstance(p, (int, float)) for p in pts):
                     raise ValueError("answer_points values must be numbers")
+        _validate_image_refs(self.type, self.config)
         return self
+
+
+# The reference keys are defined once, in services/image_refs.py (which imports nothing);
+# these are the shape rules on them (T8 spec §2.7). Whether an id is in the game's library is
+# checked by image_service.assert_in_library, under the game row lock.
+_IMAGE_OPTION_TYPES = ("multiple_choice", "multi_select")
+
+
+def _validate_image_refs(question_type: str, config: dict) -> None:
+    prompt_image = config.get(PROMPT_KEY)
+    if prompt_image is not None and not is_image_id(prompt_image):
+        raise ValueError(
+            f"config.{PROMPT_KEY} must be an image id (a positive integer)"
+        )
+    # T7 allows it on its canvas type; a legacy null is tolerated everywhere.
+    if config.get(CANVAS_KEY) is not None:
+        raise ValueError(
+            f"config.{CANVAS_KEY} is only allowed on canvas question types"
+        )
+
+    option_images = config.get(OPTIONS_KEY)
+    if option_images is None:
+        # Text-only options are validated exactly as before T8.
+        return
+    if question_type not in _IMAGE_OPTION_TYPES:
+        raise ValueError(
+            f"config.{OPTIONS_KEY} is only allowed on multiple_choice and multi_select "
+            "questions"
+        )
+    options = config.get("options")
+    if (
+        not isinstance(option_images, list)
+        or not isinstance(options, list)
+        or len(option_images) != len(options)
+    ):
+        raise ValueError(
+            f"config.{OPTIONS_KEY} must be a list with one entry per option"
+        )
+    if any(entry is not None and not is_image_id(entry) for entry in option_images):
+        raise ValueError(
+            f"config.{OPTIONS_KEY} entries must be image ids (positive integers) or null"
+        )
+    for index, (caption, image) in enumerate(zip(options, option_images)):
+        letter = chr(ord("A") + index) if index < 26 else str(index + 1)
+        if not isinstance(caption, str):
+            raise ValueError(
+                f"Option {letter}: options must be text when a question has option images"
+            )
+        if not caption.strip() and image is None:
+            raise ValueError(f"Option {letter} needs a caption or an image")
 
 
 class QuestionUpdate(BaseModel):

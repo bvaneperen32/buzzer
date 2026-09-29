@@ -5,7 +5,11 @@ python-socketio[asyncio_client]>=5.11
 sqlalchemy[asyncio]>=2.0
 asyncmy>=0.2
 alembic>=1.13
-redis[hiredis]>=5.0
+# redis-py 8 caps each asyncio connection pool at 100 by default and fails fast when it's
+# exhausted (every earlier release: 2**31). The gateway opens one per concurrent handler,
+# so 150 players answering at once hit MaxConnectionsError. Pinned below 8 until the pool
+# is sized explicitly in redis_client.py.
+redis[hiredis]>=5.0,<8
 python-jose[cryptography]>=3.3
 # passlib 1.7.x is incompatible with bcrypt>=4.0 (wrap-bug detection uses >72-byte
 # test string that bcrypt 4.0 now rejects). Pin bcrypt to 3.x until passlib is updated.
@@ -19,6 +23,7 @@ pydantic-settings>=2.0
 pydantic[email]>=2.7
 jinja2>=3.1
 python-multipart>=0.0.9
+Pillow>=12.0
 pytest>=8.0
 pytest-asyncio>=0.23
 httpx>=0.27

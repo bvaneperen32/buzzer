@@ -16,6 +16,10 @@ JWT expiry check.
 - `utils.ts` — `cn(...)` (clsx + tailwind-merge), and **`isTokenExpired(token)`**, which
   base64url-decodes the JWT payload and compares its `exp` claim against the current time.
   Returns `true` for a missing or malformed token.
+- `questionImages.ts` (T8) — the phone's side of option images: `optionImageLinks` (one small link
+  or `null` per option, from the question's `images` map; an unknown id is no image), the option
+  letters, `choiceLabel` (`A — Paris`, or the letter alone), and image options' accessible names.
+  A deliberate copy of the host's helpers; the apps share no code.
 
 ## How it fits in
 

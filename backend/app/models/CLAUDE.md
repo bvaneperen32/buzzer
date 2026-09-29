@@ -25,6 +25,13 @@ writes through these classes.
 - `session.py` — `GameSession` (one live playthrough: `room_code`, `status`, host, game, course,
   and `allow_guests`) and `SessionScore` (one row per player per question: points, correctness,
   latency, and the raw submitted answer).
+- `image.py` — `Image` (T8, migration `005`): one image in a game's library. `data` (the stored
+  full image) and `small_data` (its 400 px WebP copy) are `MEDIUMBLOB` **and deferred**, so a
+  plain `select(Image)` never reads bytes; undefer only the blob you need. Also
+  `content_type`/`width`/`height`/`byte_size`/`sha256` (all derived from the stored bytes),
+  `filename` (display only, never sent to sockets or embedded in responses), a required
+  `description` (alt text), `version` (+1 per replace; links carry it), and `replaced_at`, set
+  from the database's `NOW()` so it compares cleanly with `game_sessions.created_at`.
 
 ## How it fits in
 
@@ -64,6 +71,16 @@ realize these models live in [migrations/versions/](../migrations/versions/).
   ([routers/CLAUDE.md](../routers/CLAUDE.md)). **Questions** have no such workaround, so the
   service refuses (409) to delete any question that has ever been answered, rather than
   deleting scores.
+- **`Image.version` has a Python default as well as the server default**, and the image writes
+  `refresh()` the server-set timestamps (`created_at`, `updated_at`, `replaced_at`) after flushing.
+  Reading an expired attribute lazily raises `MissingGreenlet` under the async session — the same
+  trap applies to any server-default column you read right after an insert.
+- **`Game.images` and `Game.questions` are `passive_deletes=True`**: deleting a game leaves both
+  to the database's `ON DELETE CASCADE` instead of loading them first. That matters for images
+  (no loading blobs to delete them), and for questions because loading them ordered fails in
+  MySQL's sort once a single question is over ~256 KB (see [app/CLAUDE.md](../CLAUDE.md)). There
+  is no uploader column on `images`: a foreign key to `users` would block
+  `DELETE /api/admin/users/{id}`.
 - **`games.course_id` is nullable, with no backfill** (migration `004`). Games that existed before
   it stay unassigned: invisible to hosts and unrunnable by anyone until an admin assigns a course.
   The FK (`fk_games_course_id`) has no `ondelete`, which is fine only because courses have no

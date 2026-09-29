@@ -10,7 +10,11 @@ export/report generation actually live.
 
 - `auth_service.py` — password hashing (bcrypt, 12 rounds), RS256 JWT mint/verify, and user
   lookup/creation (`get_or_create_user_by_netid`, `create_guest_user`, `authenticate_local`).
-  Token lifetimes: access 2h, refresh 7d, temp 15min.
+  Token lifetimes: access 2h, refresh 7d, temp 15min. `create_image_token` (T8) signs image
+  links: `{token_type: "image", img, v, var, exp}`, with **no `sub` and no `iat`**, so the same
+  image, version, variant and hour always give the same token and URL (RS256 signing is
+  deterministic). HTTP and socket auth accept only `access`/`temp`, so an image token
+  authenticates nothing else.
 - `bootstrap.py` — `bootstrap_admin()`, run once from the lifespan hook. Creates the first ADMIN
   from `ADMIN_USERNAME`/`ADMIN_PASSWORD` if no admin exists; retries in a loop while the schema is
   missing rather than crashing (see its module docstring for why).
@@ -18,6 +22,31 @@ export/report generation actually live.
   (documented at the top of the file: `room:{code}`, `session:{id}:players`,
   `:player:{uid}`, `:question`, `:answered:{qid}`, `:dist:{qid}`). Also `restore_from_mysql`
   (never called — see Gotchas).
+- `game_lock.py` — T8's concurrency primitive. `lock_game(db, game_id)` is `SELECT … FROM games
+  … FOR UPDATE` with `populate_existing` (it refreshes the `Game` the access check loaded);
+  `fresh(stmt, exclusive=False)` makes any select a locking read with `populate_existing`
+  (`LOCK IN SHARE MODE`, or `FOR UPDATE` if exclusive); `lock_conflicts()` turns MySQL 1205/1213
+  into 409. See [app/CLAUDE.md](../CLAUDE.md) for the rules that use them.
+- `image_refs.py` — pure, imports nothing: the only definition of which `config` keys hold image
+  ids (`prompt_image_id`, `option_images`, `image_id`) and their roles. `image_refs` lists the
+  positive-int references; `map_image_refs` rewrites every reference slot (export: id → key;
+  import: key → provisional id → real id). Neither raises on malformed values.
+- `bundle_service.py` — pure: the one bundle builder and serializer (`serialize` is the pre-T8
+  `json.dumps(…, indent=2, ensure_ascii=False)`), the export repairs for references that don't
+  resolve, `bundle_size` (the exact export length without building base64), and `check_export`
+  (the export rule). An empty library exports version 1, byte for byte as before; otherwise
+  version 2 with the whole library.
+- `image_service.py` — T8's image code, the only code that accepts image bytes. **The pipeline**
+  (`process_image`: size, format, pixel check before decoding, conformance, normalization, small
+  copy — see its docstring and the spec's §2.5); **capacity** (`PIPELINE_LIMITER`, two slots,
+  `processing_slot`, `process_upload`, `process_bundle_images` with the import deadline);
+  **libraries** (`list_library`, `add_image`, `replace_image`, `set_description`, `delete_image`,
+  each under the game lock with fresh reads, checking budgets, the export rule, the live guard and
+  references before changing anything); **links** (`link`, `link_entry`, `verify_link`,
+  `session_links`, `player_images`); and **helpers** for others (`export_inputs`,
+  `assert_in_library`, `live_sessions`, `images_for_refs`, `get_image_meta` for T7, `data_uri` for
+  the report, `check_bundle_entries` for import). Deadlines are read through one clock function,
+  `_clock`, so tests can move time.
 - `game_service.py` — the core. Room code generation, the access rules, session lifecycle
   (`create_room` → `start_game` → `complete_game` / `abandon_game`), `authorise_player`,
   `calculate_score`, `record_answer`, and the leaderboard / game-over summary builders. The
@@ -27,7 +56,8 @@ export/report generation actually live.
     validation.
   - `assert_host_can_use_course` (the course rule) and `assert_host_can_use_game` (the game rule,
     for running *and* editing; returns the `Game`). Both let `ADMIN` through first, and 404 a
-    missing resource for admins.
+    missing resource for admins. `user_can_use_game` is the game rule as a predicate (T8: the
+    projector's link map and the report's images use it); the assertion is built on it.
   - `user_can_host_session` — the session-host predicate behind `assert_can_download_session`,
     `assert_can_delete_session`, `my-active-sessions`, and the socket HOST join.
   - Grant side effects: `revoke_game_grants_for_course` (a user lost HOST on a course) and
@@ -40,7 +70,16 @@ export/report generation actually live.
   `update_game` (only this path changes `course_id`, and it triggers the grant revocation),
   question list/create/update/delete/reorder, and bundle `export_game` / `import_game`. It owns
   `sanitize_prompt`, the **only** place prompts are bleach-sanitized. Access checks are the
-  caller's job; nothing here decides who may do what.
+  caller's job; nothing here decides who may do what. Since T8, question create/update, game
+  metadata updates and reorders take the game lock and read fresh; create and update check image
+  references, then write the question and apply the export rule to it **as stored**
+  (`_as_stored`: flush, refresh, measure — MySQL's `FLOAT` and JSON columns can store a number
+  longer than it was sent, e.g. `1e-40` → `9.99995e-41`); a refusal raises and the transaction
+  rolls back. `create_question` takes the next `order_index` from that same fresh list.
+  `import_game` runs the spec's §2.15 order (parse; metadata; image count *before* decoding
+  anything; entries; references and questions; the pipeline against a deadline; the budget; then
+  create, and the export rule on the created game as stored), all in one transaction, so a
+  failure at any step creates nothing.
 - `roster_service.py` — two roster import paths: `process_roster_csv` (Canvas gradebook export,
   parsed server-side) and `process_roster_rows` (pre-mapped rows from the frontend column
   wizard). Both upsert by `(course_id, netid)` and deactivate netids absent from the upload.
@@ -51,6 +90,10 @@ export/report generation actually live.
   (Canvas gradebook import format, with `per_question` and `roster_only` modes).
 - `report_service.py` — `build_session_report`, a self-contained HTML session report with
   aggregate stats only. Includes its own CSS, bar chart, word cloud, and histogram renderers.
+  T8: embeds small copies as data URIs (prompt images; option images beside multiple-choice
+  bars and in a new multi-select option list), only when `include_images` (the downloader passes
+  the game rule now), otherwise the withheld text; images replaced after the session was created
+  carry a note.
 
 ## How it fits in
 
@@ -62,7 +105,9 @@ Services take `db: AsyncSession` and `redis: Redis` as arguments rather than res
 themselves, which is what makes them testable without a request context.
 
 `game_management_service` imports `game_service` (for the grant revocation on a course change),
-never the reverse.
+never the reverse. T8's modules add their own one-way rules, listed in
+[app/CLAUDE.md](../CLAUDE.md): notably `image_service` and `bundle_service` never import
+`game_service` or `game_management_service`.
 
 ## Gotchas
 
@@ -147,6 +192,12 @@ never the reverse.
 - `complete_game` and `abandon_game` take a `redis` argument but `complete_game` never uses it.
   Its comment claims Redis state is kept "10 more minutes"; nothing sets a 10-minute TTL — the
   state simply rides out the remaining 90-minute room TTL.
+- **`create_room` and `start_game` take the game row lock** (T8), right after their access checks:
+  a room's creation is serialized with image replace/delete, and `start_game` re-reads the
+  session (exclusively) and its questions fresh. If a concurrent Start already moved the session
+  to `IN_PROGRESS`, it returns `None` ("already started") rather than raising, and the gateway
+  ignores that advance. `create_room`'s course-match check runs on the `Game` the lock
+  refreshed, so a course move committed while it waited is seen.
 - `start_game` and `complete_game` `commit()` deliberately (so concurrent WebSocket handlers in
   other DB sessions observe the new status); `abandon_game` only `flush()`es. Don't "harmonize"
   these without understanding the race each one is addressing.

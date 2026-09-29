@@ -30,7 +30,12 @@ questions, and reviewing results. Plus `GameLayout`, which owns the socket and a
   `IN_PROGRESS` (late joiner waiting for the next question).
 - `QuestionPage.tsx` — the answer UI, with a separate branch per question type: colour-coded
   lettered tiles for `multiple_choice`, two large buttons for `true_false`, a text field for
-  `fill_in_the_blank`, and a toggle list with an explicit Submit for `multi_select`.
+  `fill_in_the_blank`, and a toggle list with an explicit Submit for `multi_select`. T8: when any
+  multiple-choice or multi-select option has an image in `currentQuestion.images`, the options
+  render as 2-column tiles (`OptionTiles`): letter badge, the small image (`SafeImage`), caption if
+  any. Tapping works exactly as before — one tap submits multiple choice; multi-select toggles,
+  then Submit. An option whose id isn't in `images` is a text-only tile. Each image tile's
+  accessible name is "Option B: {caption}. Image: {description}" (or without the caption).
 - `FeedbackPage.tsx` — static "Answer locked in" screen with a spinner.
 - `ResultsPage.tsx` — per-question outcome: correct/incorrect, what you answered, points, running
   total, and rank.
@@ -58,6 +63,15 @@ question number, timer, and answer controls. This is the Jackbox model — the p
 projector, the phone is a controller — and `GameOverPage` *does* render prompts in the recap, so
 the omission is a deliberate live-screen decision rather than a missing line. The field is sent
 and typed, so it looks like an oversight. Don't "fix" it without checking the intent.
+
+### Images on the phone (T8)
+
+- **The phone shows option images only, never the prompt image** — the projector shows that,
+  as it shows the prompt. Links arrive in `new_question` (`images`), and a failed image is retried
+  once with the same link, then shows "Image unavailable" with its description; the option stays
+  answerable by its letter.
+- Results and the game-over recap stay text: `A — Paris`, or the letter alone when the option has
+  no caption (`choiceLabel`).
 
 ### "Correct" is derived locally, and gets it wrong
 

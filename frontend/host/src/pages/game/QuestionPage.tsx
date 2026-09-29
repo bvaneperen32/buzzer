@@ -1,10 +1,25 @@
 import { useEffect } from 'react';
 import { useGame } from './GameLayout';
 import { Button } from '../../components/ui/button';
+import { SafeImage } from '../../components/ui/SafeImage';
 import { TimerBar } from '../../components/ui/TimerBar';
+import {
+  hasCaption,
+  imageOptionName,
+  optionImageIds,
+  optionLetter,
+  promptImageId,
+} from '../../lib/questionImages';
+import type { LinkEntry } from '../../types/images';
+
+/** Keeps a box at the image's aspect ratio, as large as `maxHeight` and the width allow. */
+function fitStyle(link: LinkEntry | undefined, maxHeight: string) {
+  const ratio = link && link.width > 0 && link.height > 0 ? link.width / link.height : 4 / 3;
+  return { aspectRatio: String(ratio), width: `min(100%, calc(${maxHeight} * ${ratio}))` };
+}
 
 export default function QuestionPage() {
-  const { currentQuestion, answeredCount, playerCount, allAnswered, answerPhaseEnded, questionLocked, lockedTimerSeconds, autoAdvance, emitAdvance, emitLockQuestion } = useGame();
+  const { currentQuestion, answeredCount, playerCount, allAnswered, answerPhaseEnded, questionLocked, lockedTimerSeconds, autoAdvance, emitAdvance, emitLockQuestion, imageLinks, refreshImageLinks, imageLinksFailed } = useGame();
 
   useEffect(() => {
     if (!autoAdvance || !answerPhaseEnded) return;
@@ -33,6 +48,20 @@ export default function QuestionPage() {
     return `Up to ${d} typos allowed`;
   }
 
+  // Images come from the session link map. An id the map doesn't have is no image — unless the
+  // map itself couldn't be fetched, in which case the image shows as unavailable.
+  const linkFor = (id: number | null): LinkEntry | undefined =>
+    id === null ? undefined : imageLinks[String(id)];
+  const shown = (id: number | null) => id !== null && (!!linkFor(id) || imageLinksFailed);
+
+  const promptId = promptImageId(currentQuestion.config);
+  const promptLink = linkFor(promptId);
+  const isChoice = currentQuestion.type === 'multiple_choice' || currentQuestion.type === 'multi_select';
+  const options = currentQuestion.config.options ?? [];
+  const optionIds = isChoice ? optionImageIds(currentQuestion.config) : [];
+  const imageOptions = optionIds.some(shown);
+  const hasImages = shown(promptId) || imageOptions;
+
   const remainingSeconds = questionLocked && lockedTimerSeconds !== null
     ? lockedTimerSeconds
     : currentQuestion.startedAt
@@ -40,7 +69,10 @@ export default function QuestionPage() {
       : currentQuestion.timeLimitSeconds;
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-8 gap-8">
+    // With images on screen the layout tightens to fit one projector screen, and the image area
+    // stays narrower than the viewport by the fixed QR / room-code panel's width on each side, so
+    // the panel never covers an image. Text-only questions keep their layout.
+    <div className={`min-h-screen flex flex-col items-center justify-center ${hasImages ? 'gap-4 px-8 py-6' : 'p-8 gap-8'}`}>
       <div className="flex items-center gap-3 text-sm uppercase tracking-wider">
         <span className="text-slate-400">
           Question {currentQuestion.questionNumber} of {currentQuestion.totalQuestions}
@@ -74,6 +106,67 @@ export default function QuestionPage() {
         <h2 className="text-4xl font-bold text-slate-100 text-center max-w-3xl leading-tight">
           {currentQuestion.prompt}
         </h2>
+      )}
+
+      {hasImages && (
+      <div className="flex w-full max-w-[calc(100vw-22rem)] flex-col items-center gap-4">
+      {/* The prompt image stays up when the question locks: the room is still discussing it. */}
+      {shown(promptId) && (
+        <SafeImage
+          key={promptId}
+          src={promptLink?.url ?? null}
+          alt={promptLink?.description ?? 'Question image'}
+          style={fitStyle(promptLink, imageOptions ? '28vh' : '55vh')}
+          refresh={refreshImageLinks}
+          showRetry
+        />
+      )}
+
+      {imageOptions && (
+        <div
+          className={`grid w-full max-w-6xl gap-4 ${
+            options.length <= 2 ? 'grid-cols-2' : options.length === 3 ? 'grid-cols-3' : 'grid-cols-4'
+          }`}
+        >
+          {options.map((caption, i) => {
+            const link = linkFor(optionIds[i]);
+            const withImage = shown(optionIds[i]);
+            return (
+              <figure
+                key={i}
+                aria-label={
+                  withImage
+                    ? imageOptionName(i, caption, link?.description ?? '')
+                    : `Option ${optionLetter(i)}${hasCaption(caption) ? `: ${caption}` : ''}`
+                }
+                className="flex flex-col gap-2 rounded-2xl border border-slate-700 bg-slate-800/60 p-3"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-xl font-black text-white">
+                    {optionLetter(i)}
+                  </span>
+                  {hasCaption(caption) && (
+                    <figcaption className="text-xl font-semibold text-slate-100 leading-tight">
+                      {caption}
+                    </figcaption>
+                  )}
+                </div>
+                {withImage && (
+                  <SafeImage
+                    key={optionIds[i]}
+                    src={link?.url ?? null}
+                    alt={link?.description ?? `Option ${optionLetter(i)} image`}
+                    className={`w-full ${shown(promptId) ? 'h-[20vh]' : 'h-[36vh]'}`}
+                    refresh={refreshImageLinks}
+                    showRetry
+                  />
+                )}
+              </figure>
+            );
+          })}
+        </div>
+      )}
+      </div>
       )}
 
       <div className="text-slate-300 text-xl">

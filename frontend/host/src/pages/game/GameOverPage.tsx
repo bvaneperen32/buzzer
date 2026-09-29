@@ -1,7 +1,13 @@
 import { useNavigate } from 'react-router-dom';
 import { useGame } from './GameLayout';
 import { Button } from '../../components/ui/button';
+import { SafeImage } from '../../components/ui/SafeImage';
+import { hasCaption, optionImageIds, promptImageId } from '../../lib/questionImages';
 import type { AnswerReveal, HostQuestionSummaryItem } from '../../types/game';
+import type { LinkEntry } from '../../types/images';
+
+/** An image resolved through the session link map; `link` is undefined when the map failed. */
+type ImageFor = (id: number | null) => { link: LinkEntry | undefined } | null;
 
 const TARGET_BUCKETS = 8;
 
@@ -76,8 +82,15 @@ function AnswerBar({ label, count, total, correct, colorClass }: {
   );
 }
 
-function QuestionCard({ item, index }: { item: HostQuestionSummaryItem; index: number }) {
+function QuestionCard({ item, index, imageFor, refreshImages }: {
+  item: HostQuestionSummaryItem;
+  index: number;
+  imageFor: ImageFor;
+  refreshImages: () => Promise<void>;
+}) {
   const { type, gradingType, prompt, config, answerReveal, answerDistribution, totalAnswered, totalPlayers, correctCount, avgAnswerTimeMs, pointsValue } = item;
+  const promptImage = imageFor(promptImageId(config));
+  const optionIds = type === 'multiple_choice' || type === 'multi_select' ? optionImageIds(config) : [];
 
   const typeLabel: Record<string, string> = {
     multiple_choice: 'Multiple Choice',
@@ -135,17 +148,45 @@ function QuestionCard({ item, index }: { item: HostQuestionSummaryItem; index: n
 
       {/* Prompt */}
       <p className="text-slate-100 text-lg font-semibold leading-snug">{prompt}</p>
+      {promptImage && (
+        <SafeImage
+          src={promptImage.link?.small_url ?? null}
+          alt={promptImage.link?.description ?? 'Question image'}
+          className="h-28"
+          style={{
+            aspectRatio: promptImage.link
+              ? `${promptImage.link.width} / ${promptImage.link.height}`
+              : '4 / 3',
+          }}
+          refresh={refreshImages}
+          showRetry
+        />
+      )}
 
       {/* Distribution */}
       <div className="space-y-2">
         {(type === 'multiple_choice' || type === 'multi_select') && (config.options ?? []).map((opt, i) => {
           const count = answerDistribution[String(i)] ?? 0;
           const correct = isCorrectIndex(i);
+          const image = imageFor(optionIds[i] ?? null);
           return (
             <div key={i} className="space-y-0.5">
               <div className="flex items-center gap-2 text-xs text-slate-400">
-                <span className={`font-bold ${correct ? 'text-green-400' : ''}`}>{optionLabel(i)}.</span>
-                <span className={correct ? 'text-green-300' : ''}>{opt}</span>
+                {/* "A." then the caption; the letter alone when there's no caption (§2.11). */}
+                <span className={`font-bold ${correct ? 'text-green-400' : ''}`}>
+                  {hasCaption(opt) ? `${optionLabel(i)}.` : optionLabel(i)}
+                </span>
+                {image && (
+                  <SafeImage
+                    src={image.link?.small_url ?? null}
+                    alt={image.link?.description ?? ''}
+                    className="h-10 w-10 shrink-0"
+                    fit="cover"
+                    refresh={refreshImages}
+                    compact
+                  />
+                )}
+                {hasCaption(opt) && <span className={correct ? 'text-green-300' : ''}>{opt}</span>}
               </div>
               <AnswerBar
                 label={optionLabel(i)}
@@ -222,8 +263,14 @@ function QuestionCard({ item, index }: { item: HostQuestionSummaryItem; index: n
 // ---------------------------------------------------------------------------
 
 export default function GameOverPage() {
-  const { gameOver } = useGame();
+  const { gameOver, imageLinks, refreshImageLinks, imageLinksFailed } = useGame();
   const navigate = useNavigate();
+
+  const imageFor: ImageFor = (id) => {
+    if (id === null) return null;
+    const link = imageLinks[String(id)];
+    return link || imageLinksFailed ? { link } : null;
+  };
 
   if (!gameOver) {
     return (
@@ -299,7 +346,13 @@ export default function GameOverPage() {
             Question Breakdown
           </p>
           {questionSummary.map((item, i) => (
-            <QuestionCard key={item.questionId} item={item} index={i} />
+            <QuestionCard
+              key={item.questionId}
+              item={item}
+              index={i}
+              imageFor={imageFor}
+              refreshImages={refreshImageLinks}
+            />
           ))}
         </div>
       )}

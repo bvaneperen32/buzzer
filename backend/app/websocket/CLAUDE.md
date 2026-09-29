@@ -58,6 +58,14 @@ is orchestration and I/O, and new scoring or lifecycle rules belong in a service
 For a narrative walkthrough of one answer travelling end to end, see
 [docs/realtime.md](../../../docs/realtime.md).
 
+**T8 images.** `_question_payload` is `async` and adds `images`: small links for the question's
+option images only, keyed by image id, one query scoped to the question's own game (`{}` when
+there are none). It builds `new_question`, the late-join push and the host's `sync_state`
+question alike. Prompt images never go to phones; the projector gets its links over REST
+(`GET /api/game/sessions/{id}/images`), not the socket. When `game_service.start_game` returns
+`None`, a concurrent Start (a double click) already started the game while this advance waited
+on the game lock; the handler returns without emitting anything.
+
 `_answer_reveal` is *mostly* a derived view of `answer_data` — but for `multi_select` it forwards
 the raw `answer_points` array, and for fill-in-the-blank the raw `acceptedAnswers`. Separately,
 `_question_payload` sends `gradingType` and fill-in-the-blank's `editDistance` *during* the
@@ -155,6 +163,13 @@ question. The invariant that actually holds is "nothing answer-revealing before
   exist.
 - `authorise_player` (the player path) refuses a `GUEST` when the session has `allow_guests` off —
   the backstop for a guest whose still-valid token skips `/auth/guest`.
+
+- **A second `HOST_ADVANCE` during the QUESTION → RESULTS transition re-runs results.** The
+  handler sends the host its `QUESTION_RESULTS` first, then emits every player's own results in
+  a loop, and records `question_phase = "RESULTS"` only after that loop. An advance that arrives
+  in between (a script, or with enough players a very quick double click) still reads
+  `QUESTION` and shows results again instead of moving on. Found by T8's 150-player load check,
+  whose scripted host now waits for the phones' results first. Not fixed (not T8's scope).
 
 ### Host disconnect and reconnect
 

@@ -1,7 +1,11 @@
 # T8 — Image Support in Questions
 
 **Destination:** `docs/plans/t8-image-support.md`
-**Status:** **Ready for implementation.**
+**Status:** **Implemented** (2026-09-29, on `feature/dexter-t8-image-support`).
+- Every §4.13 step is done and the §4.11 checks pass, including the lock tests, the nginx-route
+  tests and the opt-in load and burst checks. The §4.12 manual run is complete, including a
+  physical-phone check that the user ran and reported as passed; the results are under "Manual run
+  results" in §4.12.
 - Reviews 1 (comprehension), 2 (criticism) and 3 (implementation readiness, run 2026-09-28 with
   source verification): their findings are addressed in this version.
 - Final re-check (2026-09-28, a fresh session, against the spec, the context files and the cited
@@ -10,6 +14,20 @@
   interface contradictions are resolved (`live_sessions`, `export_inputs`, §4.6), and
   `create_room` checks the course after the lock (§4.8). Its decisions are in §3.12; its
   remaining notes are in §4.15, to verify during implementation.
+- Implementation step 1 (2026-09-28): Pillow 12.3 behaviour found while building the pipeline is
+  written into §2.5 step 5 (only a size failure of normalized output is a 413) and §4.6 (opening,
+  modes, metadata, ICC, small copy). The §4.15 JPEG-comment note is resolved.
+- Implementation steps 2–7 and the mean review (2026-09-29), each written into the section it
+  changes: a non-list `option_images` in a bundle refused first (§2.15 step 5, adopted from
+  §4.15); `replace_image` takes the new file's name (§4.6); question rows, and the export's image
+  rows, sorted in Python rather than SQL (§4.6, with the pre-existing case in §5); the redis-py
+  pin (§4.2); `Game.questions` relying on the database cascade (§4.3); the serving endpoint
+  committing before it responds (§4.7); and the load generator's HTTP client (§4.11).
+- Final implementation review (2026-09-29). The earlier "`FLOAT` rounding exception" claimed a
+  stored question never exports longer than it was measured; that was false (`1e-40` exports as
+  `9.99995e-41`, and MySQL's JSON columns change some numbers too). Question writes are now
+  measured as stored (§2.6, §2.15 step 8, §4.8), with boundary tests (§4.11); the decision is in
+  §3.13. Link refreshes are also never scheduled less than 60 s apart (§4.10).
 
 Commit before any implementation (T3). If implementation reveals a flaw, revise this document first.
 **Read first:** `backend/app/CLAUDE.md` (architecture, invariants, question-type checklist),
@@ -275,7 +293,9 @@ only code that accepts image bytes.
    - scale down to the full-image edge; never scale up
    - encode JPEG as JPEG (quality 85), PNG and GIF as PNG, WebP as WebP (quality 85); if the result
      exceeds the full-image size, re-encode as WebP (quality 85)
-   - the result must conform (step 4), otherwise **413**
+   - if the result still exceeds the full-image size → **413**
+   - the result must conform (step 4). Normalization guarantees every other condition, so any other
+     failure is a pipeline bug and a logged 500, not a client error (see "Guarantee" above).
 6. **Small copy.**
    - Made from the stored full image, **always WebP** (quality 85, transparency kept), scaled down to
      the small-copy edge; never scaled up.
@@ -313,8 +333,25 @@ A failed check → **409**, naming the limit and the value the change would have
   serializer (`bundle_service`, §4.5) and every image's `data` left empty, then add
   Σ 4·⌈`byte_size`/3⌉.
 - That is exact, because base64 characters need no JSON escaping.
-- A pending question is measured as it would be stored: its prompt passes through `sanitize_prompt`
-  first, because sanitizing can lengthen it (`&` becomes `&amp;`).
+- **Questions are measured as stored** (found in the final review). MySQL doesn't store every
+  question value as it was sent, and the stored form, which is what export writes, can be longer
+  or shorter:
+  - `questions.points_value` is a single-precision `FLOAT`, read back to about 6 significant
+    digits. `1234.5678` exports as `1234.57`, but a subnormal value gains digits: `1e-40` exports
+    as `9.99995e-41`, 6 bytes longer.
+  - The `config` and `answer_data` JSON columns store an integer outside 64 bits as a double
+    (`18446744073709551616` exports as `1.8446744073709552e+19`, 2 bytes longer), and MySQL's JSON
+    parser doesn't read every double exactly (`1.0011675e+32` comes back as
+    `1.0011675000000002e+32`).
+  - So a question write (create, update, import) is measured on the rows as stored: they are
+    written, flushed and read back in the request's transaction, then measured. A refusal raises,
+    and the transaction rolls back (§2.15 step 8, §4.8). This is exact whatever the database
+    changes, including the prompt, which is stored sanitized (sanitizing can lengthen it: `&`
+    becomes `&amp;`).
+  - Game metadata and image fields are strings and integers, which MySQL stores exactly in strict
+    mode (the compose default: `STRICT_TRANS_TABLES`), so those writes are measured before they're
+    applied.
+- Stored rows are always measured exactly.
 
 **Export rule.** A write that can change a game's exported content is accepted only if, after the
 write, either:
@@ -327,7 +364,7 @@ Otherwise it is refused with **409** and nothing changes.
   - question create and update
   - game title, description and max-players update
   - image upload, replace, and description edit
-  - import, measured on the game as it would be stored
+  - import, measured on the game as stored
 - Deletes and reorders can't increase the export size and aren't checked.
 - The admin and host routers share these service functions, and future question types (T7) inherit
   the rule.
@@ -446,13 +483,16 @@ does:
 **A refused change leaves existing data intact.**
 - Locking reads happen before any assignment (see "Order" above), so a check never runs on
   half-applied state.
-- Every check runs before the change is applied to any row.
+- Every check runs before the change is applied to any row, except the export rule on question
+  writes, which measures the rows as stored (see "Export size" above). Those rows are written
+  only inside the request's transaction, which the refusal rolls back before anything commits.
 - A refusal raises an application error, and the request's transaction rolls back (`get_db` rolls
-  back on any exception).
+  back on any exception). Every router that commits explicitly does so only after the service
+  function has returned.
 - A replace prepares the new bytes and small copy in memory, and updates the row only after every
   check has passed.
-- An import validates the whole bundle, and the game it would create, before creating any row, all
-  in one transaction.
+- An import validates the whole bundle before creating any row, then measures the game it created;
+  all of it is one transaction, so a refusal at any step creates nothing.
 - The image endpoints commit before responding, so a commit failure is reported as an error rather
   than after a success response.
 
@@ -833,6 +873,9 @@ step 7 happens before any row is created.
    - `description` passes the upload rules. `filename` becomes a display-only basename (control
      characters removed, at most 255 characters).
 5. **References and questions.**
+   - **Shape first** (adopted from §4.15). A non-null `option_images` that isn't a list → 422
+     "Question 3: config.option_images must be a list". Without this, the key mapping below turns
+     it into `null` and the malformed value is silently dropped instead of refused.
    - **Version 1:** every image reference (`prompt_image_id`, `option_images` entries, `image_id`)
      must be absent or null. Otherwise 422 "Question 3: version 1 bundles can't reference images".
    - **Version 2:** every non-null reference must be a key string from `images`. An integer or
@@ -847,10 +890,14 @@ step 7 happens before any row is created.
    - An image already being decoded when the deadline passes finishes first (§2.5), so the phase can
      overrun by up to one image's processing time.
    - Steps 7 and 8 start only after the final check passes.
-7. **The game as it would be stored.** The library budget and the export rule (§2.6), for both
-   versions, with prompts measured after sanitizing.
+7. **The library budget** (§2.6), on the processed sizes, which are exactly what will be stored.
 8. **Create** the game, its images and its questions in one transaction, with provisional integers
-   mapped to the new ids. Any failure creates nothing.
+   mapped to the new ids, then apply the export rule (§2.6) to the game as stored, for both
+   versions. Any failure, including that refusal, rolls the transaction back and creates nothing.
+   - A bundle refused here has had its rows written, up to the library budget of image bytes,
+     before the rollback. That is rare, and it comes after the image processing that dominates an
+     import's time. A check on the values as sent can't safely refuse earlier, because storage
+     can shorten them as well as lengthen them.
 
 **Round trips.** Full images that conform are stored unchanged, so exporting, importing and exporting
 again reproduces the same image bytes and, for the same game content, the same bundle. Small copies
@@ -1084,6 +1131,18 @@ belong in T7's spec and aren't repeated here.
 | One `live_sessions` that always takes locks | Every library GET would hold shared locks on the game's session rows until its post-response commit, contradicting "no locks" for `list_library` (§2.6) |
 | Lock tests that release without waiting for every request | A request that arrives after release runs sequentially, so the start and order tests could pass without exercising the paths they claim to test (§4.11) |
 
+### 3.13 Decisions from the final implementation review
+
+How to measure a question write when MySQL can store it longer than it was sent (§2.6):
+
+| Alternative | Why it lost |
+|---|---|
+| Measure the values as sent, and document `FLOAT` rounding as only ever shortening them | False: a subnormal `points_value` gains digits (`1e-40` → `9.99995e-41`), and the JSON columns change numbers too |
+| Model the storage in Python (`FLOAT` as float32 printed to 6 digits) | Matches `FLOAT` on every value tried, but MySQL's JSON parser isn't exact for doubles and its behavior isn't documented; a model can't be relied on to keep the guarantee |
+| Ask MySQL first (`SELECT CAST(… AS FLOAT)`, `CAST(… AS JSON)`) and measure the answers | Keeps checks before writes, but assumes a cast stores exactly as a column does; reading the written row back assumes nothing |
+| Refuse values the database would change (subnormals, integers past 64 bits) | Changes validation for every existing game and bundle, and each newly found conversion would need another rule |
+| An early check on the values as sent for imports, before the insert | Storage can also shorten values, so it could refuse a bundle that fits once stored; an import refused at step 8 is rare |
+
 ---
 
 ## 4. Detailed Implementation
@@ -1097,7 +1156,7 @@ aren't repeated. Work proceeds in the order of §4.13.
 
 | File | Status | Change |
 |---|---|---|
-| `backend/requirements.txt` | changed | add `Pillow` (§4.2) |
+| `backend/requirements.txt` | changed | add `Pillow`; pin `redis<8` (§4.2) |
 | `backend/app/models/image.py` | new | `Image` (§4.3) |
 | `backend/app/models/game.py` | changed | `Game.images` (§4.3) |
 | `backend/app/models/__init__.py` | changed | register `Image` (§4.3) |
@@ -1185,6 +1244,12 @@ aren't repeated. Work proceeds in the order of §4.13.
 - `backend/requirements.txt`: add `Pillow`, a release whose wheels include WebP support. The backend
   image must be rebuilt (`docker compose up --build`). Unit tests run in the backend virtualenv,
   which gets Pillow from the same file.
+- `backend/requirements.txt`: pin `redis[hiredis]<8` (found in implementation). The rebuild also
+  upgraded redis-py to 8.x, which caps each asyncio connection pool at 100 by default (every
+  earlier release: 2³¹) and fails fast when it's exhausted. The gateway takes a connection per
+  concurrent handler, so the §4.11 load check's 150 players answering at once raised
+  `MaxConnectionsError`. The pin keeps the pre-T8 behaviour; lifting it means sizing the pool in
+  `redis_client.py` first.
 - `nginx/nginx.dev.conf`: per-route body limits (the nginx body limits of §2.4; location blocks in
   §4.12).
 - `tests/integration/requirements.txt`: add `Pillow` and `PyMySQL`.
@@ -1196,6 +1261,11 @@ aren't repeated. Work proceeds in the order of §4.13.
   - A `game` relationship back to `Game`.
 - `backend/app/models/game.py`: `Game.images` — `cascade="all, delete-orphan"`,
   `passive_deletes=True`, ordered by `Image.id`.
+  - `Game.questions` also gets `passive_deletes=True` (found in implementation). Deleting a game
+    otherwise loads all its questions, ordered by `order_index`, just to delete them, and that
+    sort fails for a large question (§4.6). The database already cascades questions
+    (`ON DELETE CASCADE` since migration `001`), and the admin game delete removes the game's
+    session scores first.
 - `backend/app/models/__init__.py`: import `Image` after the `game` models.
 - `backend/app/migrations/versions/005_images.py`:
   - revision `"005"`, down_revision `"004"`, with a docstring header in the style of `004`
@@ -1258,7 +1328,8 @@ and import limit constants (§2.4).
 - Plain input records:
   - `GameMeta(title, description, max_players)`
   - `QuestionFields(type, grading_type, prompt, config, answer_data, time_limit_seconds,
-    points_value)`, in order
+    points_value)`, in order, always read from the database (a question is measured as stored,
+    §2.6)
   - `ImageRecord(id, filename, description, byte_size, data)`, where `data` is `bytes | None`
 - `build_bundle(meta, questions, images, *, include_data) -> dict`: the §2.15 bundle.
   - Version 1, exactly today's structure, when `images` is empty.
@@ -1324,11 +1395,24 @@ Its constants carry the §2.4 image limits. Contents:
   - **Metadata test.** No `info` keys `exif`, `xmp`, `XML:com.adobe.xmp`, `photoshop` or `comment`;
     `getexif()` empty; PNG `text` empty; JPEG `applist` has no `APP1` or `APP13` segment.
     `icc_profile` is allowed and carried into re-encoded output.
+  - **Opening.** `Image.open` is restricted to the parsers of the four accepted formats
+    (`formats=[...]`), so no other format's parser ever runs on uploaded bytes. A JPEG with
+    multi-picture data still opens, as format `MPO`, and is refused by the format check.
   - **Normalization.** `ImageOps.exif_transpose`, then the first frame, then `thumbnail` to the
-    full-image edge with Lanczos resampling. Modes are converted only where the output format
-    requires it. Output is encoded per §2.5 step 5, without EXIF.
-  - **Small copy.** Made from the stored full image: `thumbnail` to the small-copy edge, WebP at
-    quality 85 (then 50), transparency kept.
+    full-image edge with Lanczos resampling. Output is encoded per §2.5 step 5, without EXIF.
+    - **Modes** are converted only where the output format or the resampling requires it. Pillow
+      silently resamples palette (`P`) and 1-bit images with nearest-neighbour, so those are
+      converted first (to `RGB`/`RGBA`, or `L`) whenever they're resized. 16-bit greyscale
+      (`I;16`) is scaled to 8 bits, never clipped, where the output needs 8 bits.
+    - **Metadata.** Pillow's JPEG and PNG encoders fall back to the image's own `info` for some
+      metadata. With Pillow 12.3, JPEG writes `info["comment"]` back (§4.15, verified), and
+      `info` survives `copy()`, transposes and resizes. So the output image's `info` is cleared
+      before encoding, except `transparency`, and the ICC profile is passed explicitly.
+    - **ICC.** The profile is carried only while the pixels stay in its colour space. It is
+      dropped when CMYK or greyscale pixels are converted to RGB.
+  - **Small copy.** Made from the stored full image: converted to `RGB`/`RGBA` first (WebP needs
+    it, and resizing then isn't nearest-neighbour), `thumbnail` to the small-copy edge, WebP at
+    quality 85 (then 50), transparency kept. The same metadata and ICC rules apply.
 - **Validation helpers.**
   - `clean_description(text)`: trims; the result must be 1–300 characters, else 422.
   - `clean_filename(name)`: basename only, control characters removed, at most 255 characters,
@@ -1349,8 +1433,22 @@ Its constants carry the §2.4 image limits. Contents:
     index (§4.8). Callers pass only the `QuestionFields` to `bundle_service`, whose inputs don't
     change.
   - Callers that check limits pass `locking=True` (fresh shared reads via `fresh(...)`), substitute
-    their pending change, and call `bundle_service.bundle_size` and `check_export`. A pending
-    question is built with its sanitized prompt (§4.8).
+    their change, and call `bundle_service.bundle_size` and `check_export`. Metadata and image
+    records are substituted as pending values; a question only as stored, read back after its
+    write (§2.6, §4.8).
+  - **Question rows are sorted in Python, not by SQL `ORDER BY`** (found in implementation).
+    MySQL 8's filesort carries every selected column, `config` included, in its sort buffer
+    (256 KB by default), and fails with error 1038 ("Out of sort memory") once a single
+    question's row is larger. A question of about 300 KB is enough, well inside nginx's 1 MiB
+    request limit. An `ORDER BY` here would make every write to such a game, its export, its
+    meters and its report fail with a 500. So every T8 read that selects question content —
+    `export_inputs`, `used_by`, `start_game`'s question list, the report's questions and
+    `list_questions` — fetches the rows unordered and sorts them by `(order_index, id)`, which
+    is the same order. The `id` tiebreak also makes the order and the question numbers
+    deterministic when two questions share an `order_index`. The export's image read, which
+    selects both blobs, sorts by id in Python too (found in the mean review: `EXPLAIN` showed
+    a filesort when the optimizer chose a range plan, which would carry the blobs through the
+    same sort buffer).
   - Export and `list_library` pass `locking=False`.
   - Export passes `with_data=True`.
 - **Budgets.** `check_budgets(count, library_bytes)` raises `ConflictError` per §2.6.
@@ -1366,7 +1464,7 @@ Its constants carry the §2.4 image limits. Contents:
     raises the count or budget 409 early when the library is already full, before any processing.
     The locked checks in `add_image` stay authoritative.
   - `add_image(db, game_id, processed, filename, description)`: the budgets and the export rule.
-  - `replace_image(db, redis, game_id, image_id, processed)`: reads the image row with
+  - `replace_image(db, redis, game_id, image_id, processed, filename)`: reads the image row with
     `fresh(..., exclusive=True)`; the live guard, budgets and export rule; then the new bytes,
     `version + 1`, `replaced_at = func.now()`, and `filename` set to the new file's cleaned
     basename; `description` is kept.
@@ -1405,21 +1503,29 @@ Its constants carry the §2.4 image limits. Contents:
   - Loads the row with only the requested blob undeferred; missing → 404.
   - Requires `version` to equal the row's version; otherwise 404.
   - Returns the bytes with the §2.9 headers. Error responses carry no caching headers.
+  - Commits (ends the read transaction) before returning (found in the mean review). `get_db`
+    commits only after the response has been sent, so without this every download held a
+    pooled connection, shared with answer handling, for as long as a slow phone took to receive
+    the body.
 - `backend/app/main.py`: include the router under `/api`, like the others.
 
 ### 4.8 Questions, games, export and import
 
 `backend/app/services/game_management_service.py`:
+- **`_as_stored(db, question)`**: flushes a question just written, refreshes it from the
+  database, and returns its `QuestionFields` as export will read them (§2.6, "Questions are
+  measured as stored"). The refresh reads the transaction's own write, so it needs no lock.
 - **`create_question`**: `lock_game`, then `image_service.assert_in_library` for the question's
-  references, then the export rule on the would-be game (`export_inputs(locking=True)` with the new
-  question added, its prompt measured as `sanitize_prompt(body.prompt)`), then the existing insert.
-  `order_index`, when not given, is the maximum `order_index` in that same fresh question list
-  plus 1, never a separate plain read. The router has already validated the body as
-  `QuestionCreate`.
+  references, then `export_inputs(locking=True)`, then the insert (prompt sanitized), then the
+  export rule with `_as_stored` of the new question added to that fresh list. `order_index`, when
+  not given, is the maximum `order_index` in that same fresh question list plus 1, never a
+  separate plain read. The router has already validated the body as `QuestionCreate`, and commits
+  only after this returns.
 - **`update_question`**: `lock_game`, then `_get_question` with `fresh(...)` (shared,
   `populate_existing`), then the merge and `QuestionCreate(**merged)`, then `assert_in_library` on
-  the merged `config`, then the export rule with the merged question (prompt sanitized), then the
-  `setattr` loop. Nothing is assigned before the checks pass.
+  the merged `config`, then `export_inputs(locking=True)`. Only after every locking read, the
+  `setattr` loop (prompt sanitized), then the export rule with `_as_stored` of the question in
+  place of its old fields. A refusal raises, and `get_db` rolls the update back.
 - **`update_game`**: `lock_game`, which refreshes the `Game` object the access check returned. When
   the title, description or `max_players` changes, the export rule runs on the would-be metadata;
   only then are the fields assigned. The course-change path is unchanged.
@@ -1436,10 +1542,11 @@ Its constants carry the §2.4 image limits. Contents:
   - step 5: `map_image_refs` to provisional integers, the version 1 refusal, then `QuestionCreate`
   - step 6: `image_service.process_bundle_images(entries, deadline_at = anyio.current_time() +
     import processing deadline)`, whose final deadline check runs before step 7
-  - step 7: `check_budgets` and the export rule with `bundle_service.bundle_size` (prompts
-    sanitized)
+  - step 7: `check_budgets`
   - step 8: `create_game`, insert the images (flushing for ids), map provisional integers to real
-    ids, insert the questions
+    ids, insert the questions (prompts sanitized), flush, then `check_export(0, bundle_size(...))`
+    on `export_inputs(game.id, locking=False)`: a plain read, since every row of the new game is
+    this transaction's own insert
 
   All of this runs in the request's single transaction; any failure raises before the commit.
 
@@ -1549,6 +1656,11 @@ Its constants carry the §2.4 image limits. Contents:
   - `lib/sessionImages.ts`: `useSessionImageLinks(sessionId)` returns `{ links, refresh }`. It
     fetches once `sessionId` is known, and again within 10 minutes of the earliest `expires_at`.
     `refresh` coalesces calls made at the same time into one request.
+  - `lib/linkExpiry.ts`: `refreshDelayMs`, the scheduled-refresh delay both hooks use. It is never
+    less than 60 s (found in the final review). Every fetch replaces the links, which schedules
+    the next refresh, so a client clock 1 h 50 min fast (fresh links expire 2–3 h after the
+    server's time) would otherwise compute 0 each time and refetch in a tight loop. An image
+    that fails sooner still refreshes at once, through `SafeImage`.
 - **Components.**
   - `components/ui/SafeImage.tsx` (presentational): props `src`, `alt`, sizing classes, optional
     `refresh(): Promise<void>`, optional `showRetry`. It shows a loading state, then implements the
@@ -1728,6 +1840,24 @@ Tests:
     - A game exactly at the export limit exports to exactly 41,943,040 bytes and re-imports.
     - A minified version 1 bundle that grows past the export limit when re-serialized → 409, with no
       game created.
+- **Measured as stored** (found in the final review, §2.6). Four tests, each on a game held at an
+  exact headroom by a padding question plus a small probe question. Every refusal would have been
+  accepted by a check on the values as sent; each was run against that measurement and failed at
+  its refusal step. Every exact fit lands on the export limit to the byte.
+  - `test_question_update_measured_as_stored_float`: `points_value` 1 → `1e-40` grows 2 bytes as
+    sent and 8 as stored. At headroom 7 → 409, meter and question unchanged; at headroom 8 → 200,
+    the response shows `9.99995e-41`, and the export is exactly the limit. Shrinking back at the
+    limit is accepted.
+  - `test_question_update_measured_as_stored_json`: a `config` integer changed from 2⁶⁴−1 to 2⁶⁴
+    (both 20 digits, so no growth as sent) grows 2 bytes as stored. At headroom 1 → 409; at
+    headroom 2 → 200 and exactly the limit.
+  - `test_question_create_measured_as_stored`: a question with `points_value` `1e-40`; its stored
+    growth g is measured, then at headroom g − 1 → 409 with the question count unchanged, and at
+    headroom g → 201 and exactly the limit.
+  - `test_import_measured_as_stored`: a version 1 bundle written exactly as the exporter would
+    write it, with `points_value` `1e-40`. At 3 bytes under the limit as sent → 409, no game; at
+    6 bytes under → 201, and its export is exactly the limit and equal to the bundle with the
+    stored value.
 - **`test_game_start_reads_fresh_questions`** (a lock test, below):
   1. The test locks the game and inserts a question in the same transaction.
   2. The host emits `host_advance` in the lobby.
@@ -1839,6 +1969,12 @@ Tests:
     version, which is safe because a version's bytes never change.
   - **Limits:** it runs from one machine in development mode, so rate limits are off and the socket
     manager is in-memory. It measures the backend and the database pool, not phone networks.
+  - **The load generator must not be the bottleneck** (found in implementation). From one Python
+    process, httpx tops out near 100 requests/s at this concurrency. Every endpoint then looks
+    equally slow — even `/api/health` and a request refused before any database access — which
+    measures the client, not the backend. ApacheBench and aiohttp both show the same backend
+    serving about 500 health requests/s. The image fetches therefore use aiohttp, already an
+    integration dependency through the socket.io client.
 - **Burst.**
   - 6 concurrent 30 MP non-conforming uploads.
   - It records status codes (201 or 503), latencies, and the backend's peak memory sampled from
@@ -2033,6 +2169,47 @@ blank row saves, and the blank row is dropped.
   - a 503 shown as the server's message when processing is busy (force it by holding both slots
     during the burst check)
   - `scripts/simulate_players.py` playing an image-option game
+- **A phone needs the laptop's LAN address** (found in the manual run). Open the host at
+  `http://<LAN address>:8080/host/`, because the QR code encodes the host page's own address, and
+  add `http://<LAN address>:8080` to `CORS_ORIGINS` for the run, because socket.io refuses any
+  other origin. `.env` reaches the backend only when its container is recreated
+  (`docker compose up -d --no-deps --force-recreate backend`); remove the entry, and recreate the
+  container again, afterwards.
+
+**Manual run results (2026-09-29).**
+- **Scripted browser runs** (Playwright driving Chrome through nginx; the projector at 1440×900,
+  the phone emulated at 390×844) covered every item above except the physical phone:
+  - a 3.28 MiB upload through the editor
+  - image options on both screens
+  - prompt images on all four question types
+  - the live-session banner
+  - export and import through the editor
+  - a report whose multiple-choice and multi-select image options both render
+  - a blocked link showing the placeholder
+  - a leftover blank row dropped on save
+  - The busy 503 couldn't be forced as planned: six 30 MP uploads finish in about 1.5 s on two
+    slots, well inside the 20 s wait (§4.15). It was checked by answering an upload with the
+    backend's exact 503 body. The editor showed the server's message, and a retry uploaded once.
+  - `simulate_players.py` played an image-option game with 12 players to the end.
+- **Desktop Chrome check (user-reported).** Run by the user at `http://localhost:8080`, with the
+  player at 390×844. It reported these as passing:
+  - image rendering, including the option with no caption
+  - multi-select toggles
+  - results thumbnails
+  - the final 3-point score
+  - Two same-browser tabs share one sign-in (an existing behavior; see `frontend/CLAUDE.md`). A
+    guest joining in one tab therefore replaced the host's sign-in. Only a clean repeat with one
+    account counts.
+- **Physical phone (user-reported).** Run by the user on an iPhone, through the laptop's LAN
+  address, with the prepared test game.
+  - The checklist it was given covered QR joining, image loading, answering (including the
+    option with no caption and the multi-select toggles), leaving and returning to the browser
+    mid-question, results, and the projector's thumbnails.
+  - The user reported the check as passed, not step by step.
+  - The iPhone model, iOS version and browser version weren't recorded.
+  - Afterwards, the temporary `CORS_ORIGINS` entry was removed and the backend recreated.
+- **Test game kept for re-runs:** "T8 phone check" (a prompt image; multiple-choice image options,
+  one without a caption; multi-select image options), in the development database.
 
 ### 4.13 Implementation order
 
@@ -2079,20 +2256,35 @@ implementation; if one proves real, revise this document first, as for any flaw.
   to the import processing deadline. `database.py` uses SQLAlchemy's default pool (5 + 10 overflow,
   30 s timeout), shared with gameplay. Verify whether this matters under realistic concurrent
   authoring; an early commit after the access check is one possible remedy, not adopted (§3.12).
-- **JPEG comments on re-encode.** Pillow ≥ 9.4 may write `im.info["comment"]` back when saving a
-  JPEG, which would make normalized output fail conformance (a 413). Check with the pinned Pillow;
-  a unit case "a JPEG with a COM segment normalizes to conforming bytes" settles it.
+  *Checked in implementation:* no pool timeouts in the burst check or the 150-player load check.
+  Still not adopted: about 15 uploads waiting at once (the pool's 5 + 10) would make every other
+  request, gameplay included, wait for a connection, but one editor uploads one file at a time.
+  The serving endpoint, whose requests are many and can be slow on phone networks, does release
+  its connection before sending (§4.7).
+- **JPEG comments on re-encode.** *Verified in implementation step 1: real.* Pillow 12.3's JPEG
+  encoder writes `im.info["comment"]` back unless a comment is passed, and `info` survives
+  `copy()` and resizing. Resolved in §4.6 (the output's `info` is cleared before encoding). The
+  unit case "a JPEG with a COM segment normalizes to conforming bytes" guards it.
 - **Forcing a 503 in the manual run.** §4.12's "hold both slots during the burst check" may not
   produce a 20 s wait, since six decodes on two slots usually finish sooner. Find a reliable way
   (for example a temporarily lower slot wait limit in a dev run) or rely on the unit tests and the
-  503 message in `lib/api.ts`.
+  503 message in `lib/api.ts`. *Outcome:* the burst can't produce one (six 30 MP uploads finish
+  within about 1.5 s on two slots; the wait limit is 20 s). The unit tests cover the server side
+  (both slots held by gates). The editor's side was checked in a browser by answering an upload
+  with the backend's exact 503 body: the editor showed the busy message, and a retry uploaded once.
 - **Test plumbing.** The "no writes after an overdue result" unit test passes its own deadline,
   but `import_game`'s signature (§4.8) has none: a keyword-only override or a patched constant
   both work. The module-level `PIPELINE_LIMITER` may need replacing per test, because
-  pytest-asyncio gives each test a new event loop.
-- **A non-list `option_images` in a version 2 bundle.** `map_image_refs` turns it into `None`
-  before `QuestionCreate` runs, so it is dropped rather than refused. Consider refusing it (422) in
-  §2.15 step 5, before mapping.
+  pytest-asyncio gives each test a new event loop. *Step 1:* `processing_slot` reads the
+  module-level limiter at call time, and the unit tests replace it with a fresh one per test.
+  *Later steps:* the deadline arithmetic reads the clock through one module-level function in
+  `image_service` (`_clock`, which is `anyio.current_time`), and `import_game` takes its deadline
+  from `image_service.import_deadline()`. The deadline tests then move a fake clock past the
+  deadline while a gated decode is running, instead of racing real sleeps. That was a reported
+  source of flakiness. Slot waits still use real time, but only where both slots are held by
+  gates, so a timeout is certain.
+- **A non-list `option_images` in a version 2 bundle.** *Adopted:* §2.15 step 5 now refuses it
+  (422) before mapping, instead of letting `map_image_refs` turn it into `None` and drop it.
 - **Scope of the order-uniqueness claim** (§2.6). It covers creates without an explicit
   `order_index`. The API still accepts one; the editor never sends one.
 - **nginx location breadth.** The upload/replace regex (§4.12) also matches GET, PATCH and DELETE
@@ -2127,6 +2319,23 @@ implementation; if one proves real, revise this document first, as for any flaw.
   course, can still rejoin and drive that session. Only their REST image links stop (§2.9).
 - A lock-wait timeout or deadlock during `start_game` reaches the projector as the existing fatal
   `error`. It's unlikely, because nothing holds the game lock for long.
+- **Question rows over about 256 KB break SQL sorts that select them** (found in T8
+  implementation; MySQL error 1038, see §4.6). T8's own reads sort in Python. The pre-existing
+  game-over summaries (`game_service.get_player_question_summary` and
+  `get_host_question_summary`) still `ORDER BY order_index` while selecting `config`, so a game
+  with such a question fails at game over. Not changed by T8.
+
+**Follow-ups found during the manual run** (in `nginx/nginx.dev.conf`, which T8 changed only for
+`/api/` routes; each is separate and not fixed by T8):
+- **An app path without its trailing slash is a 404.** `/player`, `/host` and `/admin` return 404;
+  only `/player/`, `/host/` and `/admin/` are served. The lobby tells players to type
+  `<address>/player`, which is one of the broken paths (`LobbyPage.tsx`). The QR code isn't
+  affected, because it links to `/player/join?code=…`. Possible fixes: `location = /player
+  { return 302 /player/; }` for each app, or show `/player/` in the lobby.
+- **The bare address redirects to the wrong port.** `location = /` returns `302 /player/`. nginx
+  makes that absolute from its own container port, 80, so `http://<address>:8080/` redirects to
+  `http://<address>/player/`, and the connection fails. `absolute_redirect off;` would send a
+  relative `Location` and keep the port.
 
 **Risks to watch during implementation and testing:**
 - **Load** when many phones fetch option images at once, including **database pool contention**
