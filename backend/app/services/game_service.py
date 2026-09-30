@@ -699,6 +699,34 @@ def calculate_score(question: Question, answer_data: dict) -> ScoreResult:
     return ScoreResult(points_awarded=0, is_correct=False)
 
 
+def answer_dist_keys(question: Question, answer_data: dict) -> list[str]:
+    """The distribution counters (the results bar chart, word cloud, heatmaps) an answer adds
+    one to."""
+    if question.type == "multiple_choice":
+        idx = answer_data.get("selectedIndex")
+        return [str(idx)] if idx is not None else []
+    if question.type == "true_false":
+        val = answer_data.get("selectedValue")
+        return ["true" if val else "false"] if val is not None else []
+    if question.type == "fill_in_the_blank":
+        text = " ".join((answer_data.get("text") or "").lower().split())
+        return [text] if text else []
+    if question.type == "multi_select":
+        indices = answer_data.get("selectedIndices")
+        if not isinstance(indices, list):
+            return []
+        return [str(idx) for idx in indices if isinstance(idx, int)]
+    if question.type == sort_it.TYPE:
+        # One key per card, so at most n·(k+1) ≤ 50 keys per question.
+        placements = sort_it.parse_answer(question.config, answer_data)
+        return list(sort_it.dist_keys(placements)) if placements is not None else []
+    if question.type == spot_it.TYPE:
+        # One key per answer: at most cols·rows ≤ 100 keys per question.
+        cell = spot_it.parse_answer(question.config, answer_data)
+        return [spot_it.dist_key(cell)] if cell is not None else []
+    return []
+
+
 async def record_answer(
     db: AsyncSession,
     redis: Redis,
@@ -708,66 +736,74 @@ async def record_answer(
     answer_data: dict,
     answer_time_ms: int | None,
 ) -> ScoreResult:
-    """
-    Score an answer, write it to MySQL immediately, and update Redis score.
-    Returns the score result.
+    """Score an answer, persist it, then count it in Redis. Returns the score result.
+
+    The MySQL row is committed first, and only then does Redis change: the player's running
+    score, the answered mark and the distribution, together (`state.apply_answer`). An attempt
+    that fails therefore leaves nothing, or a committed row whose Redis counts a retry adds
+    (`finish_recorded_answer`): never counts without a row. The gateway runs one player's
+    attempts at a question one at a time and looks for the row first, so there is never a
+    second row either.
     """
     result = calculate_score(question, answer_data)
-
-    # Persist to MySQL immediately (per-question persistence guarantee)
-    score_row = SessionScore(
-        session_id=session_id,
-        user_id=user_id,
-        question_id=question.id,
-        points_awarded=result.points_awarded,
-        answer_time_ms=answer_time_ms,
-        is_correct=result.is_correct,
-        answer_data=answer_data or None,
+    db.add(
+        SessionScore(
+            session_id=session_id,
+            user_id=user_id,
+            question_id=question.id,
+            points_awarded=result.points_awarded,
+            answer_time_ms=answer_time_ms,
+            is_correct=result.is_correct,
+            answer_data=answer_data or None,
+        )
     )
-    db.add(score_row)
-    await db.flush()
-
-    # Update Redis running score and answered set
-    await state.update_player_score(redis, session_id, user_id, result.points_awarded)
-    await state.mark_answered(redis, session_id, question.id, user_id)
-
-    # Increment per-option distribution counter for the results bar chart
-    dist_key: str | None = None
-    if question.type == "multiple_choice":
-        idx = answer_data.get("selectedIndex")
-        if idx is not None:
-            dist_key = str(idx)
-    elif question.type == "true_false":
-        val = answer_data.get("selectedValue")
-        if val is not None:
-            dist_key = "true" if val else "false"
-    elif question.type == "fill_in_the_blank":
-        text = " ".join((answer_data.get("text") or "").lower().split())
-        if text:
-            dist_key = text
-    elif question.type == "multi_select":
-        indices = answer_data.get("selectedIndices")
-        if isinstance(indices, list):
-            for idx in indices:
-                if isinstance(idx, int):
-                    await state.increment_answer_dist(
-                        redis, session_id, question.id, str(idx)
-                    )
-    elif question.type == sort_it.TYPE:
-        # One key per card, so at most n·(k+1) ≤ 50 keys per question.
-        placements = sort_it.parse_answer(question.config, answer_data)
-        if placements is not None:
-            for key in sort_it.dist_keys(placements):
-                await state.increment_answer_dist(redis, session_id, question.id, key)
-    elif question.type == spot_it.TYPE:
-        # One key per answer: at most cols·rows ≤ 100 keys per question.
-        cell = spot_it.parse_answer(question.config, answer_data)
-        if cell is not None:
-            dist_key = spot_it.dist_key(cell)
-    if dist_key is not None:
-        await state.increment_answer_dist(redis, session_id, question.id, dist_key)
-
+    await db.commit()
+    await state.apply_answer(
+        redis,
+        session_id,
+        question.id,
+        user_id,
+        result.points_awarded,
+        answer_dist_keys(question, answer_data),
+    )
     return result
+
+
+async def recorded_answer(
+    db: AsyncSession, session_id: str, user_id: str, question_id: int
+) -> SessionScore | None:
+    """This player's stored answer to the question in this session, if there is one."""
+    result = await db.execute(
+        select(SessionScore)
+        .where(
+            SessionScore.session_id == session_id,
+            SessionScore.user_id == user_id,
+            SessionScore.question_id == question_id,
+        )
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
+async def finish_recorded_answer(
+    redis: Redis,
+    question: Question,
+    session_id: str,
+    user_id: str,
+    points: float,
+    answer_data: dict,
+) -> bool:
+    """Count a stored answer in Redis (its row's points and answer), for an attempt that
+    committed its row and then failed before counting it. Returns False, changing nothing, if
+    it was already counted."""
+    return await state.apply_answer(
+        redis,
+        session_id,
+        question.id,
+        user_id,
+        points,
+        answer_dist_keys(question, answer_data),
+    )
 
 
 # ---------------------------------------------------------------------------

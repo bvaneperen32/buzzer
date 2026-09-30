@@ -234,16 +234,39 @@ but `sync_state` carries no results or game-over data, so recovery after a refre
 
 ### State and lifecycle
 
-- **`GameLayout`'s socket effect depends on `[code, navigate]`, and `navigate` is *not* stable
-  here** (B1, found during T7's browser checks; T7 spec §11). With a plain `BrowserRouter`, React
-  Router 6.30's `useNavigate` is rebuilt whenever the pathname changes, so every route change (lobby →
-  question → results → …) tears the socket down and opens a new one, which re-sends `join_room`.
-  It mostly works because join re-syncs, but it's churn, and in the player app it loses answers
-  (see [player pages/CLAUDE.md](../../../player/src/pages/CLAUDE.md)). The fix is to keep
-  `navigate` out of the effect's dependencies (read it through a ref). *Noted, not scheduled.*
-  It's linked to B2 (the backend never runs its host-disconnect handling for a started game; see
-  [websocket/CLAUDE.md](../../../../backend/app/websocket/CLAUDE.md)): B2 currently hides this
-  churn from the players, so fix B1 first or both together.
+- **One socket for the whole game.** `GameLayout`'s socket effect depends only on `code`.
+  - Handlers navigate through `navigateRef`, which every render points at the current
+    `navigate`. With a plain `BrowserRouter`, React Router 6.30 rebuilds `navigate` whenever the
+    pathname changes.
+  - Don't add `navigate` back to the dependencies. Every screen change would then re-create the
+    socket (B1, fixed with B2; `docs/plans/fix-live-session-test-cleanup.md`).
+  - Now that the server handles a host disconnect (see
+    [websocket/CLAUDE.md](../../../../backend/app/websocket/CLAUDE.md)), each re-created socket
+    would lock the players' question and show them "Host disconnected".
+  - Cleanup removes every listener (`sock.off()`) before disconnecting, so a torn-down socket
+    (StrictMode's double mount, leaving the game) can't change state.
+- **A lost connection shows a banner, not the error screen.** Once the socket has connected,
+  a `disconnect` or a failed retry (`connect_error`) shows "Connection lost — reconnecting…
+  Controls are paused until the game is back." over the current screen. It shows only while
+  socket.io will retry (`sock.active`). A first connection that fails, or one the server
+  refuses, still gets the error screen.
+- **The controls wait for the server.** `canControl` is true only between the projector's
+  `sync_state`, which the server sends once it has seated the socket, and the next `connect` or
+  `disconnect`.
+  - Until then, Start / Lock / Unlock / Show Results / Next are disabled, and the banner stays up.
+  - `emitAdvance` / `emitLockQuestion` drop anything sent meanwhile rather than queue it: a
+    buffered Next or Lock would land after the rejoin as a stale action.
+  - Auto-advance's 1.5 s pause and the results countdown run only while `canControl`, and start
+    again after a rejoin.
+- **Delayed results aren't an error.** If an answer is still being recorded when the server's
+  bounded wait ends, Show Results publishes nothing, and the server sends `results_delayed`.
+  - `GameLayout` sets `resultsDelayed`, and `QuestionPage` shows "An answer is still being
+    saved, so the results aren't ready yet. Press Show Results again in a moment." Show Results
+    stays enabled for that.
+  - The question stays closed (the room gets `question_locked`), and Unlock reopens it instead.
+  - The notice clears on the results, the next question, an unlock or a rejoin.
+  - Auto-advance doesn't retry by itself: its pause has already fired, so the host presses
+    Show Results.
 - The `answer_phase_ended` handler filters on `currentQuestionIdRef` to drop stale events. This
   guards against the backend's orphaned-timer race — don't remove it.
 - Auto-advance is driven from two different pages with different timings: `QuestionPage` waits
@@ -256,6 +279,7 @@ but `sync_state` carries no results or game-over data, so recovery after a refre
   them (they stay in the Redis set), so a roster built from `players` and the count will disagree.
 - Any `error` event replaces the whole game UI (`GameLayout` returns an error screen) until the
   socket reconnects — including recoverable errors such as starting a game with no questions.
+  (A lost connection is different: see the reconnecting banner above.)
 - `RequireAuth` (in `App.tsx`) only checks that a token string exists. Inside the shell,
   `HostShell`'s `/auth/me` then catches an expired token (401 → `/login`). **Game routes don't
   pass through the shell**, so there an expired token still renders the page and fails at the

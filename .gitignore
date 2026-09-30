@@ -26,3 +26,6 @@ data/
 *.swp
 *.swo
 .venv/
+
+# Ownership ledgers of test runs (tests/ledger.py); a leftover one means an interrupted run.
+tests/.ledgers/

@@ -27,6 +27,11 @@ _TRACKED = [
     "player_left",
     "host_disconnected",
     "game_abandoned",
+    "question_locked",
+    "question_unlocked",
+    "host_reconnected",
+    "answer_rejected",
+    "results_delayed",
     "error",
 ]
 
@@ -40,6 +45,8 @@ class TestSocketClient:
         self.label = label
         self.sio = socketio.AsyncClient(logger=False, engineio_logger=False)
         self._queues: dict[str, asyncio.Queue] = {e: asyncio.Queue() for e in _TRACKED}
+        # Every tracked event's name, in the order it arrived.
+        self.order: list[str] = []
         self._register_handlers()
 
     # ------------------------------------------------------------------
@@ -52,6 +59,7 @@ class TestSocketClient:
             @self.sio.on(event)
             async def _handler(data=None, _ev=event):
                 logger.debug("[%s] received %s: %s", self.label, _ev, data)
+                self.order.append(_ev)
                 await self._queues[_ev].put(data or {})
 
     # ------------------------------------------------------------------

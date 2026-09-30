@@ -38,9 +38,9 @@ plan depends on:
 stack (`APP_ENV=development`, which disables rate limiting). Bring the stack up with
 `docker compose up`; the database must be at migration `004`
 (`docker compose exec backend alembic upgrade head`). Then, with the venv active (`.venv\Scripts\`
-on Windows): `cd tests/integration && pytest test_t4_access.py -v`. At `0b8b3f2` the full suite
-(`pytest -v`) was recorded as 24 passed + 2 skipped, or 26 passed with `--fast`. **CI runs no
-pytest suite** — these tests only run when someone runs them locally.
+on Windows): `cd tests/integration && python -m pytest test_t4_access.py -v`. At `0b8b3f2` the
+full suite (`pytest -v`) was recorded as 24 passed + 2 skipped, or 26 passed with `--fast`. **CI
+runs no pytest suite** — these tests only run when someone runs them locally.
 
 **The test file** (`tests/integration/test_t4_access.py`):
 - `T4Env` is a per-test helper; the `t4` fixture creates one and calls `cleanup()` afterwards.
@@ -514,7 +514,8 @@ it would only catch regressions when someone runs it locally. Revisit if T7 or T
 
 ## 8. Verification
 
-1. With the stack up, run `cd tests/integration && pytest -v`, then `pytest -v --fast`. Expected:
+1. With the stack up and the venv active, run `cd tests/integration && python -m pytest -v`, then
+   `python -m pytest -v --fast`. Expected:
    57 passed and 2 skipped without `--fast`; 59 passed with it. That's the existing 26 plus the 33
    new collected tests (15 functions; B1a and B1c have 8 cases each, and B3a has 5).
 2. `git diff main --stat -- . ':!ai_log' ':!docs/plans'` lists only

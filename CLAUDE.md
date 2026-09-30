@@ -41,11 +41,28 @@ docker compose exec backend [command]
 # Run inside the container or with venv active
 alembic upgrade head
 alembic revision --autogenerate -m "description"
-pytest
-pytest --cov=app
 ruff check .
 ruff format .
 ```
+
+### Tests
+The suites live at the repo root, not in the backend image, so they run on the host with the
+repo's virtual environment active (`source .venv/bin/activate`; `.venv\Scripts\activate` on
+Windows). Each suite has its own `pytest.ini`, so run it from its own directory:
+
+```bash
+# Unit: no stack needed. They import the backend as `app`, so backend/ must be on the path
+# (Windows PowerShell: $env:PYTHONPATH = "..\..\backend").
+cd tests/unit && PYTHONPATH=../../backend python -m pytest -q
+
+# Integration: needs the compose stack up (and MySQL on 3306 for the lock and cleanup tests)
+cd tests/integration && python -m pytest -q -rs
+```
+
+`pytest-cov` isn't in any requirements file, so `--cov` isn't available. The browser checks are
+standalone scripts: see [tests/browser/README.md](tests/browser/README.md). Both suites delete
+the records they create, by exact id; after a run killed outright, `python tests/cleanup.py`
+removes what it left (`--report` only lists older test-like leftovers, read-only).
 
 ### Frontend Applications
 ```bash

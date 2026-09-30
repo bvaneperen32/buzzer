@@ -91,7 +91,8 @@ takes `db` and `redis` as arguments so it's testable without a request context.
 it's scored, and leaderboards are aggregated from MySQL. Redis holds room metadata, the player
 set, the current question, and answer distributions. When they disagree, MySQL wins — with one
 hole: `session_scores` has no unique constraint on (session, user, question), so the only guard
-against double-scoring is a non-atomic Redis check (see [app/CLAUDE.md](app/CLAUDE.md)).
+against double-scoring is the gateway's, which holds within one process (see
+[app/CLAUDE.md](app/CLAUDE.md)).
 
 ## Gotchas
 
@@ -99,9 +100,11 @@ against double-scoring is a non-atomic Redis check (see [app/CLAUDE.md](app/CLAU
 
 Three independent mechanisms assume a single worker:
 
-- **Gateway bookkeeping** — `_sid_ctx`, `_timer_tasks`, `_abandon_tasks` are per-process dicts. A
-  host who reconnects to a different process leaves the original process's abandon task running,
-  which then **abandons a game that has a live host**.
+- **Gateway bookkeeping** — `_sid_ctx`, `_timer_tasks`, `_abandon_tasks`,
+  `_host_presence_locks`, `_answer_turns`, `_answers_in_flight` and `_results_building` are
+  per-process. A host who reconnects to a different process leaves the original process's
+  abandon task running, which then **abandons a game that has a live host**; a retried answer
+  on another process can be recorded twice.
 - **Rate limiting** — slowapi's default in-memory storage; counters are per-process.
 - **JWT keys** — if `JWT_PRIVATE_KEY`/`JWT_PUBLIC_KEY` are unset *or fail to base64-decode*, each
   worker silently generates its own ephemeral keypair, so tokens verify only on the worker that

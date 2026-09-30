@@ -1,6 +1,7 @@
 """Sort It browser checks (spec §4.6): drag, tap-tap and keyboard; lock and unlock; time-out;
 points display and its rounding regressions; game over; the results cross-check against the
-report; and a socket drop and reconnect that must keep the placements.
+report; one socket per page for a whole game (B1); and the placements surviving a socket drop
+and reconnect, and a host disconnect and return (B2).
 
     cd tests/browser && python bc_sort.py
 """
@@ -18,7 +19,7 @@ from bc_common import (
     BASE, SHOTS, Api, Checks, Host, SocketProxy, SocketWatch, cell, cell_point, launch,
     new_context, scene, sort_body, spot_body, stamp, text_squash, until,
 )
-from integration.engine.socket_client import TestSocketClient
+from tests.integration.engine.socket_client import TestSocketClient
 
 C = Checks("sort")
 
@@ -28,11 +29,6 @@ KEY = [0, 1, 2, 0, 2, 1, 0, 2]
 
 
 SOCKETS: dict[int, object] = {}  # each phone page's socket log
-
-
-async def ready(page, since: float) -> None:
-    """Wait until the phone's socket, re-created by its navigation (B1), has re-joined."""
-    await SOCKETS[id(page)].rejoined(page, since)
 
 
 async def phone_page(browser, api, code, name, shape, *, proxy=False):
@@ -155,12 +151,11 @@ async def play(browser, api: Api):
     p2 = await phone_page(browser, api, code, "Quin", "360x640@2")
     p3 = await phone_page(browser, api, code, "Rae", "390x844@3")
     await expect(projector.get_by_text("3 players joined")).to_be_visible(timeout=15000)
-    since = await host.click("Start Game")
+    await host.click("Start Game")
 
     # ---- S1: 8 cards, 3 boxes ----
     for phone in (p1, p2, p3):
         await expect(chip(phone, 0)).to_be_visible(timeout=15000)
-        await ready(phone, since)
     order = [int(v) for v in await p1.locator("[data-drop-pool] button[data-card]").evaluate_all(
         "els => els.map(e => e.getAttribute('data-card'))")]
     C.check("cards appear in the shared shuffled order, not the author's", sorted(order) == list(range(8)) and order != list(range(8)), order)
@@ -198,11 +193,11 @@ async def play(browser, api: Api):
     # P3 uses the keyboard, and the host locks and unlocks in the middle.
     await key_place(p3, 0, KEY[0])
     await key_place(p3, 1, KEY[1])
-    await host.click("Lock Question", navigates=False)
+    await host.click("Lock Question")
     await expect(chip(p3, 2)).to_be_disabled(timeout=10000)
     kept = [await in_box(p3, 0), await in_box(p3, 1)]
     C.check("lock disables the board and keeps the placements", kept == ["0", "1"], kept)
-    await host.click("Unlock Question", navigates=False)
+    await host.click("Unlock Question")
     await expect(chip(p3, 2)).to_be_enabled(timeout=10000)
     C.check("unlock re-enables the board with the placements kept", [await in_box(p3, 0), await in_box(p3, 1)] == ["0", "1"])
     for card in range(2, 8):
@@ -226,11 +221,11 @@ async def play(browser, api: Api):
     C.check("phone (keyboard, locked and unlocked): 8 of 8 correct", "8 of 8 correct" in await result_text(p3))
 
     async def next_question(expect_card: bool = True):
-        since = await host.click("Next Question")
+        # The phones answer as soon as the question shows: no wait for a socket re-join (B1).
+        await host.click("Next Question")
         target = (lambda phone: chip(phone, 0)) if expect_card else (lambda phone: phone.locator("canvas[data-grid-rect]"))
         for phone in (p1, p2, p3):
             await expect(target(phone)).to_be_visible(timeout=15000)
-            await ready(phone, since)
 
     # ---- S2: k = 4 → 708.3 ----
     await next_question()
@@ -305,6 +300,10 @@ async def play(browser, api: Api):
     C.check("phone game over has a line per T7 question", len(lines) == 7, lines)
     cards = await projector.locator("table[data-sort-results]").count()
     C.check("projector game over: a Sort It table per Sort It question", cards == 6, cards)
+    for label, sockets in (("the projector", host.sockets), ("phone Pam", SOCKETS[id(p1)]),
+                           ("phone Quin", SOCKETS[id(p2)]), ("phone Rae", SOCKETS[id(p3)])):
+        C.check(f"{label} kept one socket across all 7 questions (B1)", len(sockets.sockets) == 1,
+                f"sockets opened: {len(sockets.sockets)}")
     first = await table_rows(projector, projector.locator("table[data-sort-results='accuracy']").first)
     C.check("projector game over rows are in the author's order", list(first) == list(range(8)), list(first))
     C.check("projector game over numbers match the results screen", first == expected_rows(answers, KEY, 3), first)
@@ -404,15 +403,14 @@ async def reconnect_keeps_placements(browser, api: Api):
     page = await phone_page(browser, api, code, "Rex", "390x844@3", proxy=True)
     sockets = SOCKETS[id(page)]
     await expect(projector.get_by_text("1 player joined")).to_be_visible(timeout=15000)
-    since = await host.click("Start Game")
+    await host.click("Start Game")
     await expect(chip(page, 0)).to_be_visible(timeout=15000)
-    await ready(page, since)
     for card in range(3):
         await tap_place(page, card, key[card])
     placed = [await in_box(page, card) for card in range(4)]
     pushes = len(sockets.events("new_question"))
     dropped = await sockets.drop()
-    await ready(page, dropped)
+    await sockets.rejoined(page, dropped)
     await until(page, lambda: len(sockets.events("new_question")) > pushes, what="the repeated question")
     reconnected = [sock for sock in sockets.sockets if sock["opened"] >= dropped]
     C.check("dropping the socket makes socket.io reconnect on its own (no reload)",
@@ -431,12 +429,55 @@ async def reconnect_keeps_placements(browser, api: Api):
     await page.context.close()
 
 
+async def host_disconnect_keeps_placements(browser, api: Api):
+    """B2: the projector goes away mid-question. The phone's board locks with its placements and
+    the banner shows; the projector's return unlocks it with the placements kept, and the board
+    then submitted is scored."""
+    boxes, cards, key = ["Land", "Sea"], ["Cat", "Shark", "Dog", "Eel"], [0, 1, 0, 1]
+    course_id, game_id = api.setup_game("Sort It host disconnect")
+    api.question(game_id, sort_body(boxes, cards, key, prompt="Land or sea"))
+    code, _ = api.room(course_id, game_id)
+
+    async def open_projector():
+        ctx = await new_context(browser, api.token)
+        projector = await ctx.new_page()
+        await projector.goto(f"{BASE}/host/game/{code}/lobby")
+        return Host(projector)
+
+    host = await open_projector()
+    page = await phone_page(browser, api, code, "Ivy", "390x844@3")
+    await expect(host.page.get_by_text("1 player joined")).to_be_visible(timeout=15000)
+    await host.click("Start Game")
+    await expect(chip(page, 0)).to_be_visible(timeout=15000)
+    for card in range(2):
+        await tap_place(page, card, key[card])
+    await host.page.context.close()
+    await expect(page.get_by_text("Host disconnected")).to_be_visible(timeout=10000)
+    await expect(chip(page, 2)).to_be_disabled(timeout=10000)
+    kept = [await in_box(page, card) for card in range(4)]
+    C.check("a host disconnect locks the board and keeps the placements", kept == ["0", "1", None, None], kept)
+    host = await open_projector()
+    await expect(chip(page, 2)).to_be_enabled(timeout=10000)
+    C.check("the host's return unlocks the board with the placements kept",
+            [await in_box(page, card) for card in range(4)] == ["0", "1", None, None])
+    await expect(page.get_by_text("Host disconnected")).to_have_count(0, timeout=10000)
+    C.check("the host's return clears the Host disconnected banner", True)
+    for card in (2, 3):
+        await tap_place(page, card, key[card])
+    await submit(page, confirm=False)
+    await host.click("Show Results")
+    text = await result_text(page)
+    C.check("the board submitted after the host's return is scored", "4 of 4 correct" in text, text)
+    await host.page.context.close()
+    await page.context.close()
+
+
 async def main():
     api = Api()
     try:
         async with async_playwright() as pw:
             browser = await launch(pw)
-            for step in (play, reconnect_keeps_placements, cross_check):
+            for step in (play, reconnect_keeps_placements, host_disconnect_keeps_placements, cross_check):
                 try:
                     await step(browser, api)
                 except Exception as exc:  # record, then continue with the next group

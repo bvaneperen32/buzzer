@@ -52,6 +52,20 @@ export interface SyncStatePayload {
   status: 'LOBBY' | 'IN_PROGRESS' | 'COMPLETED' | 'ABANDONED';
   playerCount: number;
   questionLocked?: boolean;
+  /** The raw Redis record (snake_case); only its id is read. */
+  currentQuestion?: { question_id: number } | null;
+  /** Whether the server already has this player's answer to the current question. */
+  hasAnswered?: boolean;
+  /** The host has gone and not yet returned (the server's grace period is running). */
+  hostDisconnected?: boolean;
+}
+
+/** An answer that arrived after its question locked ("locked") or moved on ("closed"). Not an
+ *  error: the game goes on, and the answer didn't count. */
+export interface AnswerRejectedPayload {
+  questionId: number;
+  reason: 'locked' | 'closed';
+  message: string;
 }
 
 export interface PlayerJoinedPayload {
@@ -101,13 +115,16 @@ export interface PlayerResultsPayload {
   yourScore: number;
   yourRank: number;
   playerCount: number;
+  /** Whether the server has this player's answer (every question type). Results say "No
+   *  answer" from this alone: the phone's own record of what it sent, and zero points, can't
+   *  tell. */
+  answered?: boolean;
   // T7 questions only (spec §2.7): enough to render the result from this payload alone, even
   // after a reload between answering and results.
   questionType?: QuestionType;
   gradingType?: 'ACCURACY' | 'COMPLETENESS';
   /** The question's maximum points. */
   pointsValue?: number;
-  answered?: boolean;
   /** This player's validated answer, or null when they didn't answer. */
   yourAnswer?: SortAnswer | GridCell | null;
   yourIsCorrect?: boolean;

@@ -23,13 +23,14 @@ function fitStyle(link: LinkEntry | undefined, maxHeight: string) {
 }
 
 export default function QuestionPage() {
-  const { currentQuestion, answeredCount, playerCount, allAnswered, answerPhaseEnded, questionLocked, lockedTimerSeconds, autoAdvance, emitAdvance, emitLockQuestion, imageLinks, refreshImageLinks, imageLinksFailed } = useGame();
+  const { currentQuestion, answeredCount, playerCount, allAnswered, answerPhaseEnded, questionLocked, lockedTimerSeconds, autoAdvance, canControl, resultsDelayed, emitAdvance, emitLockQuestion, imageLinks, refreshImageLinks, imageLinksFailed } = useGame();
 
+  // Waits for the controls: a reconnect restarts the pause instead of firing into the gap.
   useEffect(() => {
-    if (!autoAdvance || !answerPhaseEnded) return;
+    if (!autoAdvance || !answerPhaseEnded || !canControl) return;
     const id = setTimeout(emitAdvance, 1500);
     return () => clearTimeout(id);
-  }, [autoAdvance, answerPhaseEnded, emitAdvance]);
+  }, [autoAdvance, answerPhaseEnded, canControl, emitAdvance]);
 
   if (!currentQuestion) {
     return (
@@ -212,16 +213,24 @@ export default function QuestionPage() {
         {questionLocked && <span className="ml-3 text-amber-400 font-semibold">· Answers locked</span>}
       </div>
 
+      {resultsDelayed && (
+        <p role="status" className="text-amber-300 text-lg" data-results-delayed>
+          An answer is still being saved, so the results aren't ready yet. Press Show Results again
+          in a moment.
+        </p>
+      )}
+
       <div className="flex gap-4">
         <Button
           size="lg"
           variant="outline"
           onClick={emitLockQuestion}
+          disabled={!canControl}
           className={`px-10 ${questionLocked ? 'border-amber-500 text-amber-400 hover:bg-amber-500/10' : ''}`}
         >
           {questionLocked ? 'Unlock Question' : 'Lock Question'}
         </Button>
-        <Button size="lg" onClick={emitAdvance} className="px-10">
+        <Button size="lg" onClick={emitAdvance} disabled={!canControl} className="px-10">
           Show Results
         </Button>
       </div>

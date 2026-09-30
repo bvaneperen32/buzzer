@@ -14,10 +14,17 @@ GAME_OVER = "game_over"
 PLAYER_JOINED = "player_joined"
 PLAYER_LEFT = "player_left"
 HOST_DISCONNECTED = "host_disconnected"
+HOST_RECONNECTED = "host_reconnected"  # to the room: a host announced as gone is back
 GAME_ABANDONED = "game_abandoned"
 
 # Server → specific client
 ANSWER_RECEIVED = "answer_received"
+# An answer refused because its question locked or moved on: a normal outcome, not an ERROR
+# (ERROR stays for malformed requests and authorization/session failures).
+ANSWER_REJECTED = "answer_rejected"
+# To the host: Show Results published nothing, because an answer let in before the question
+# closed is still being recorded. Also not an ERROR: the host can show the results again.
+RESULTS_DELAYED = "results_delayed"
 SYNC_STATE = "sync_state"
 ERROR = "error"
 

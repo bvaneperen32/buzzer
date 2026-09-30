@@ -66,12 +66,14 @@ export default function ResultsPage() {
     return <T7Results results={questionResults} />;
   }
 
-  const { answerReveal, yourPoints, yourScore, yourRank, playerCount } = questionResults;
-  const answeredLabel = describeAnswer(
-    lastAnswerData,
-    currentQuestion?.type ?? '',
-    currentQuestion?.config.options,
-  );
+  const { answerReveal, yourPoints, yourScore, yourRank, playerCount, answered } = questionResults;
+  // Whether the answer counted is the server's to say: what this phone sent proves nothing (it
+  // may have been refused as late, or dropped after a reconnect), and neither do zero points (a
+  // wrong answer, or a question worth 0, still counts).
+  const noAnswer = answered === false;
+  const answeredLabel = noAnswer
+    ? null
+    : describeAnswer(lastAnswerData, currentQuestion?.type ?? '', currentQuestion?.config.options);
   const isCompleteness = answerReveal.type === 'completeness';
   const isFitb = answerReveal.type === 'fill_in_the_blank';
   const isCorrect = !isCompleteness && yourPoints > 0;
@@ -80,10 +82,15 @@ export default function ResultsPage() {
     isFitb && 'acceptedAnswers' in answerReveal ? answerReveal.acceptedAnswers : [];
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-6 gap-5 text-center">
+    <div
+      className="min-h-screen flex flex-col items-center justify-center p-6 gap-5 text-center"
+      data-results={currentQuestion?.type ?? ''}
+    >
 
-      {/* Correct / Wrong / Recorded */}
-      {isCompleteness ? (
+      {/* No answer / Recorded / Correct / Wrong */}
+      {noAnswer ? (
+        <p className={`${TONE_CLASS.missing} text-4xl font-black`}>No answer</p>
+      ) : isCompleteness ? (
         <p className="text-indigo-400 text-4xl font-black">Answer recorded!</p>
       ) : isCorrect ? (
         <p className="text-green-400 text-4xl font-black">Correct!</p>

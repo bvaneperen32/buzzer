@@ -87,14 +87,22 @@ The `config.py` default omits `:5174`, so the player socket works in dev only if
   admin's links into the host app arrive signed in only under nginx.
 - **One socket, owned by `GameLayout`.** In host and player, a single `GameLayout` component opens
   the connection, maps every event to state, and exposes it through a React context. Child pages
-  are views. No Redux, Zustand, or query library anywhere.
+  are views. No Redux, Zustand, or query library anywhere. The socket lives for the whole game:
+  its effect depends only on the room code, and handlers navigate through a ref, because React
+  Router rebuilds `navigate` on every screen change (B1; each app's `pages/CLAUDE.md`).
 - **The server owns the game.** Clients emit and react; they never decide phase transitions. Even
   routing is event-driven.
 - **Any socket `error` event is treated as fatal.** Both `GameLayout`s swap the whole game screen
-  for the message and a "Back to…" link, and clear it only on reconnect. The gateway uses `error`
-  for routine rejections too, so a player whose tap lands just after the question auto-locks
-  ("Question is locked") is ejected from the game. Separate recoverable errors before building on
-  this.
+  for the message and a "Back to…" link, and clear it only on reconnect. The gateway keeps
+  `error` for malformed requests and authorization/session failures.
+  - **Recoverable outcomes use their own events.** A late answer (a tap just after the question
+    locked or moved on) is `answer_rejected`: the phone keeps its screen and says the answer
+    didn't count. Results held back while an answer is still being recorded are
+    `results_delayed`: the projector says so, and Show Results can be pressed again.
+  - **A lost connection is not an error.** Once a socket has connected, a disconnect or failed
+    retry shows a "Connection lost — reconnecting…" banner over the mounted screen, until the
+    server confirms the rejoin (`sync_state`). Until then the projector's controls are
+    disabled.
 - **Images arrive as server-issued links, never built by a client** (T8). A link is a
   root-relative `/api/images/{id}/v{version}/{full|small}?t=…`, signed and valid for 2–3 hours,
   loaded by a plain `<img>` with no bearer token. The host gets them from REST (the editor's

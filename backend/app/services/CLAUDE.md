@@ -20,8 +20,11 @@ export/report generation actually live.
   missing rather than crashing (see its module docstring for why).
 - `state_service.py` — the Redis layer and the authoritative description of the key namespace
   (documented at the top of the file: `room:{code}`, `session:{id}:players`,
-  `:player:{uid}`, `:question`, `:answered:{qid}`, `:dist:{qid}`). Also `restore_from_mysql`
-  (never called — see Gotchas).
+  `:player:{uid}`, `:question`, `:answered:{qid}`, `:dist:{qid}`). An answer is counted by
+  `apply_answer` alone: the running score, the answered mark and the distribution in one
+  MULTI/EXEC, skipped if the player is already marked. It and `set_player_connected` watch the
+  player's record, so neither overwrites the other's write. Also `restore_from_mysql` (never
+  called — see Gotchas).
 - `game_lock.py` — T8's concurrency primitive. `lock_game(db, game_id)` is `SELECT … FROM games
   … FOR UPDATE` with `populate_existing` (it refreshes the `Game` the access check loaded);
   `fresh(stmt, exclusive=False)` makes any select a locking read with `populate_existing`
@@ -180,15 +183,23 @@ never the reverse. T8's modules add their own one-way rules, listed in
 
 - **Adding a question type touches about two dozen sites** — the canonical checklist, backend and
   frontend, is in [app/CLAUDE.md](../CLAUDE.md). In this directory: `calculate_score`,
-  `record_answer`'s distribution key, `get_player_question_summary`, `get_host_question_summary`
-  (*two* switches — reveal and distribution), and four in `report_service`. The current
+  `answer_dist_keys` (live play's distribution key), `get_player_question_summary`,
+  `get_host_question_summary` (*two* switches — reveal and distribution), and four in
+  `report_service`. The current
   `multi_select` type shows what missing some looks like: `report_service` has no `multi_select`
   branch in `_answer_reveal`, `_extract_answer_key`, its type-badge map, or the chart dispatch in
   `build_session_report`, so those questions render in the HTML report as a bare card with no
   distribution and an unstyled raw-slug badge.
-- `record_answer` writes a `SessionScore` row unconditionally. Deduplication is the caller's job
-  (the gateway's Redis `has_answered` check), and nothing in MySQL backs it up — see
-  [models/CLAUDE.md](../models/CLAUDE.md).
+- `record_answer` writes a `SessionScore` row unconditionally, **commits it**, and only then
+  counts it in Redis (`state.apply_answer`). A failure therefore leaves nothing, or a committed
+  row not yet counted, which `finish_recorded_answer` counts: when the answer is retried
+  (`recorded_answer` finds it), or when the results are shown (the gateway counts every stored
+  row Redis hasn't before reading totals).
+  - Deduplication is the caller's job. The gateway runs one player's attempts at a question one
+    at a time and looks for the row first.
+  - Nothing in MySQL backs it up — see [models/CLAUDE.md](../models/CLAUDE.md).
+  - Its commit is deliberate, like `start_game`'s: the answer is acknowledged only once stored.
+    `answer_dist_keys` gives an answer's distribution keys.
 - **`is_correct` is computed by exact float equality** (`points == question.points_value`) for
   `multiple_choice` and `true_false`. Authoring `0.1 + 0.2` style values, or any float that
   doesn't round-trip, silently marks a right answer wrong. `fill_in_the_blank` and `multi_select`
@@ -243,11 +254,13 @@ never the reverse. T8's modules add their own one-way rules, listed in
 - **Only `room:{code}` has a TTL.** The `players`, `player:*`, `question`, `answered:*`, and
   `dist:*` keys have none. They're removed only by an explicit `delete_room_state`, which
   `complete_game` doesn't call — so a completed session leaks those keys indefinitely.
-- **`update_player_score` is a read-modify-write, not atomic.** Two answers scored concurrently
-  for the same player can lose an update. MySQL remains correct (the leaderboard is aggregated
-  from `session_scores`), so this affects the Redis-cached running score only.
-- Its signature says `delta: int -> int`, and `add_player` says `score: int = 0`, but points are
-  floats throughout. The annotations are wrong, not the behavior.
+- **The player record is JSON, read-modify-written.** Its two writers during a game,
+  `apply_answer` (the score) and `set_player_connected` (the flag), both WATCH it and retry if it
+  changed. Before that, a reconnect's flag write could overwrite an answer's score (the lost
+  update was reproduced alongside the double-recording it hid). `add_player` still overwrites the
+  record outright, but only for a player who has none.
+- `add_player` says `score: int = 0`, but points are floats throughout. The annotation is wrong,
+  not the behavior.
 - **`restore_from_mysql` is dead code.** Nothing calls it, and it wouldn't rebuild Redis if
   something did: despite its docstring ("Rebuild Redis state") and its unused `redis` parameter,
   it only reads MySQL and returns a dict. There is no Redis-recovery path — see

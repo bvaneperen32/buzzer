@@ -2125,7 +2125,8 @@ blank row saves, and the blank row is dropped.
      `ON DELETE CASCADE`.
   5. `DROP DATABASE buzzer_migration_test`.
 - **Dev database:** `alembic upgrade head` only.
-- **Test suites:** `cd tests/unit && pytest -v`, then `cd tests/integration && pytest -v` with the
+- **Test suites** (venv active): `cd tests/unit && PYTHONPATH=../../backend python -m pytest -v`,
+  then `cd tests/integration && python -m pytest -v` with the
   stack up. Existing tests must remain intact.
 - **Supported nginx setup.**
   - The compose `nginx` service (port 8080) mounts `nginx/nginx.dev.conf`, the only nginx
@@ -2146,10 +2147,11 @@ blank row saves, and the blank row is dropped.
 - **nginx configuration:** after editing `nginx.dev.conf`, run `docker compose exec nginx nginx -t`.
 - **Required lock tests.** The lock-harness tests use the MySQL connection on the existing `3306`
   mapping. If they are skipped, **verification is incomplete**, not passed.
-- **Load and burst checks:** run once before merge (`pytest test_t8_image_load.py --image-load`),
+- **Load and burst checks:** run once before merge (`cd tests/integration && python -m pytest
+  test_t8_image_load.py --image-load -s`),
   and record their numbers in the merge request description.
 - **Checks through nginx.**
-  - After `npm run build`, with the compose stack up, run `cd tests/integration && pytest
+  - After `npm run build`, with the compose stack up, run `cd tests/integration && python -m pytest
     test_t8_nginx_limits.py --nginx-url http://localhost:8080`.
   - The rest of the suite calls port 8000 directly and never exercises nginx; direct requests have
     no body limit (§2.4).

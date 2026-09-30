@@ -63,7 +63,8 @@ Redis record. Client→server payloads are snake_case** (`room_code` / `role`; `
 
 `ResultsPage` and `GameOverPage` both decide correctness as `points > 0` for the original four
 types, while the server uses `points >= pointsValue`. (T7's two types don't: their screens read
-the server's `yourIsCorrect`, or the answer and reveal, from the payload.) Any partial-credit
+the server's `yourIsCorrect`, or the answer and reveal, from the payload. And whether there is an
+answer at all — "No answer" — every type's results take from the server's `answered`.) Any partial-credit
 answer shows the player a green "Correct!" that the database records as incorrect. This is the most user-visible defect in the app — and the fix for
 `ResultsPage` is local: the server's authoritative `isCorrect` arrives on `answer_received` and
 is already stored in `GameContext` as `answerResult`; `ResultsPage` just doesn't read it. (It's
@@ -72,22 +73,26 @@ absent after a refresh, and the game-over summary has no per-question `isCorrect
 
 ### Types understate the protocol
 
-`SyncStatePayload` declares only `status`, `playerCount`, and `questionLocked`. The server also
-sends `yourScore`, `currentQuestion`, and `hasAnswered` — all three are dropped. Dropping
-`hasAnswered` is mostly harmless, because the server only re-sends the question (the late-join
-`new_question`) to players who *haven't* answered. The real reconnect gaps — stuck loading
+`SyncStatePayload` declares `status`, `playerCount`, `questionLocked`, and (for the pending
+answer after a reconnect) `hasAnswered` and the id of `currentQuestion` — a raw snake_case Redis
+record, of which only `question_id` is typed. The server also sends `yourScore`, which is
+dropped. `sync_state` still restores no screen by itself: the real reconnect gaps — stuck loading
 screens after a refresh, and no way back to final results — are in
 [pages/CLAUDE.md](pages/CLAUDE.md).
 
 `QuestionPayload.prompt` is typed and received but never rendered during a live question — a
 deliberate Jackbox-style choice (see [pages/CLAUDE.md](pages/CLAUDE.md)), not a bug.
 
-### Errors eject the player
+### Errors eject the player; late answers and lost connections don't
 
-Any socket `error` event makes `GameLayout` replace the whole screen with the message and a "Back
-to Join" link, cleared only on reconnect. The gateway sends `error` for routine rejections — most
-often "Question is locked" when a tap lands just after the server's auto-lock (the phone's timer
-isn't synced to the server, so this happens in real games). The player is effectively kicked out.
+- **An `error` ejects.** Any socket `error` event makes `GameLayout` replace the whole screen with
+  the message and a "Back to Join" link, cleared only on reconnect. The gateway keeps `error` for
+  malformed requests and authorization/session failures, such as a refused join.
+- **A late tap doesn't.** A tap that lands just after the server's auto-lock, or after results,
+  happens in real games (the phone's timer isn't synced to the server). It gets
+  `answer_rejected` instead: the screen stays and says the answer didn't count.
+- **Neither does a lost connection.** It shows a "reconnecting" banner and keeps the screen. See
+  [pages/CLAUDE.md](pages/CLAUDE.md).
 
 ### Divergence from the sibling apps
 

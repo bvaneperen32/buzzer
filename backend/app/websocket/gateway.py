@@ -17,7 +17,7 @@ Architecture notes:
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -75,6 +75,29 @@ _abandon_tasks: dict[str, asyncio.Task] = {}  # type: ignore[type-arg]
 
 # session_id → asyncio.Task (question time-limit countdown)
 _timer_tasks: dict[str, asyncio.Task] = {}  # type: ignore[type-arg]
+
+# session_id → lock serializing a host's disconnect handling with a host (re)joining, so the
+# disconnect's lock and abandon task can't land after the rejoin that should undo them.
+_host_presence_locks: dict[str, asyncio.Lock] = {}
+
+# (session_id, question_id, user_id) → [lock, holders]: one player's attempts at one question
+# run one at a time. An answer sent again (a retry after a reconnect) waits for the attempt
+# before it and then finds that attempt's outcome, instead of recording the answer twice. An
+# entry goes when its last holder leaves.
+_answer_turns: dict[tuple[str, int, str], list] = {}
+
+# session_id → one Event per answer being handled, set when it finishes. Showing results
+# closes the question and then waits for these, so the results count every answer the server
+# acknowledged.
+_answers_in_flight: dict[str, set[asyncio.Event]] = {}
+
+# The longest showing results waits for answers still being recorded.
+_ANSWER_DRAIN_SECONDS = 10.0
+
+# Sessions whose Show Results is being handled (`_show_results`). Another Show Results, or a
+# lock toggle, meanwhile is ignored: the first one's outcome is on its way, and a toggle would
+# reopen the question under it.
+_results_building: set[str] = set()
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +225,17 @@ async def _emit_error(sid: str, message: str) -> None:
     await sio.emit(E.ERROR, {"message": message}, to=sid)
 
 
+async def _reject_answer(sid: str, question_id: int, reason: str, message: str) -> None:
+    """An answer that arrived after its question locked ("locked") or moved on ("closed").
+    A normal race in a live game — the player's screen stays up — unlike ERROR, which clients
+    treat as fatal and which stays for malformed requests and authorization/session failures."""
+    await sio.emit(
+        E.ANSWER_REJECTED,
+        {"questionId": question_id, "reason": reason, "message": message},
+        to=sid,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Background tasks
 # ---------------------------------------------------------------------------
@@ -283,11 +317,17 @@ async def _auto_unlock_for_host(
 
     remaining: float = room_state.pop("timer_remaining_seconds", 0.0)
     room_state.pop("question_locked_by_disconnect", None)
+    if remaining <= 0:
+        # The time was already up when the host dropped: keep the lock the timer would have
+        # set, rather than reopening a question with no timer left to close it.
+        room_state["timer_remaining_seconds"] = 0.0
+        await state.set_room_state(redis, room_code, room_state)
+        return
     room_state["question_locked"] = False
 
     current_q = await state.get_current_question(redis, session_id)
 
-    if current_q and remaining > 0:
+    if current_q:
         virtual_start = datetime.now(timezone.utc) - timedelta(
             seconds=current_q["time_limit_seconds"] - remaining
         )
@@ -322,10 +362,127 @@ async def _auto_unlock_for_host(
         )
 
 
+def _time_left(current_q: dict) -> float:
+    """The open question's time left, in seconds (never below 0): its time limit less the time
+    since its start, which an unlock moves forward so a pause doesn't count."""
+    started_at = datetime.fromisoformat(current_q["started_at"])
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    elapsed = (datetime.now(timezone.utc) - started_at).total_seconds()
+    return max(0.0, current_q["time_limit_seconds"] - elapsed)
+
+
+def _host_presence(session_id: str) -> asyncio.Lock:
+    return _host_presence_locks.setdefault(session_id, asyncio.Lock())
+
+
+def _host_seated(session_id: str) -> bool:
+    """Whether a host socket of this session is registered on this process."""
+    return any(
+        ctx["role"] == "HOST" and ctx["session_id"] == session_id
+        for ctx in _sid_ctx.values()
+    )
+
+
+async def _seat_host(
+    sid: str, user_id: str, session_id: str, room_code: str, redis
+) -> dict | None:
+    """Register a host socket, cancel the abandon countdown and undo a disconnect's lock.
+
+    Runs under the session's host-presence lock, so a disconnect being handled finishes first,
+    and reads the room fresh inside it: the caller's copy may predate that disconnect's lock.
+    Returns the room state as it stands afterwards (None if the room is gone).
+    """
+    async with _host_presence(session_id):
+        task = _abandon_tasks.pop(session_id, None)
+        if task:  # the room was told the host had gone: cancel the countdown, tell it they're back
+            task.cancel()
+            logger.info("host_reconnected_abandon_cancelled", session_id=session_id)
+
+        await sio.enter_room(sid, room_code)
+        await sio.enter_room(sid, _host_room(room_code))
+        _sid_ctx[sid] = {
+            "user_id": user_id,
+            "role": "HOST",
+            "room_code": room_code,
+            "session_id": session_id,
+        }
+
+        room_state = await state.get_room_state(redis, room_code)
+        if room_state:
+            room_state["host_sid"] = sid
+            await state.set_room_state(redis, room_code, room_state)
+            await _auto_unlock_for_host(redis, session_id, room_code, room_state)
+        if task:
+            # Sent whether or not the question unlocked: a lock the host set by hand stays.
+            await sio.emit(E.HOST_RECONNECTED, {}, to=room_code)
+        return room_state
+
+
+async def _host_left(redis, sid: str, session_id: str, room_code: str) -> None:
+    """A host socket closed during a started game: lock the open question (pausing its timer),
+    tell the room, and start the grace period. Caller holds the host-presence lock."""
+    if _host_seated(session_id):
+        # The host is still here on another socket: a reconnect whose new socket joined before
+        # the old one's close reached us, or a second (admin) host.
+        logger.info(
+            "host_socket_closed_host_still_seated", sid=sid, session_id=session_id
+        )
+        return
+
+    room_state = await state.get_room_state(redis, room_code)
+    if not room_state or room_state.get("status") != "IN_PROGRESS":
+        return
+
+    # Auto-lock the active question so the timer pauses while the host is away
+    locked: dict | None = None
+    if room_state.get("question_phase") == "QUESTION" and not room_state.get(
+        "question_locked"
+    ):
+        current_q = await state.get_current_question(redis, session_id)
+        if current_q:
+            remaining = _time_left(current_q)
+
+            timer = _timer_tasks.pop(session_id, None)
+            if timer:
+                timer.cancel()
+
+            room_state["question_locked"] = True
+            room_state["timer_remaining_seconds"] = remaining
+            room_state["question_locked_by_disconnect"] = True
+            await state.set_room_state(redis, room_code, room_state)
+            locked = {
+                "questionId": current_q["question_id"],
+                "remainingSeconds": remaining,
+            }
+            logger.info(
+                "question_auto_locked_host_disconnect",
+                session_id=session_id,
+                remaining_seconds=remaining,
+            )
+
+    # Everything is in place before anyone is told: the lock is stored and the grace period
+    # registered, so a player joining during the broadcasts below reads the same state they
+    # announce (sync_state's questionLocked and hostDisconnected).
+    abandon_at = (
+        datetime.now(timezone.utc) + timedelta(seconds=_HOST_GRACE_SECONDS)
+    ).isoformat()
+    _abandon_tasks[session_id] = asyncio.create_task(
+        _host_abandon_task(session_id, room_code)
+    )
+    if locked:
+        await sio.emit(E.QUESTION_LOCKED, locked, to=room_code)
+    await sio.emit(E.HOST_DISCONNECTED, {"abandonAt": abandon_at}, to=room_code)
+    logger.warning("host_disconnected_grace_started", session_id=session_id)
+
+
 async def _host_abandon_task(session_id: str, room_code: str) -> None:
     """Abandon the game if the host does not reconnect within the grace period."""
     try:
         await asyncio.sleep(_HOST_GRACE_SECONDS)
+        # A rejoin cancels this task; this only guards against abandoning a live host.
+        if _host_seated(session_id):
+            return
         async with _db() as db:
             redis = await get_redis()
             session = await db.get(GameSession, session_id)
@@ -336,7 +493,10 @@ async def _host_abandon_task(session_id: str, room_code: str) -> None:
     except asyncio.CancelledError:
         pass
     finally:
-        _abandon_tasks.pop(session_id, None)
+        # Only remove our own entry, as _question_timer_task does: a rejoin cancels this task,
+        # and a later disconnect may already have stored a replacement under the same key.
+        if _abandon_tasks.get(session_id) is asyncio.current_task():
+            _abandon_tasks.pop(session_id, None)
 
 
 # ---------------------------------------------------------------------------
@@ -436,50 +596,8 @@ async def disconnect(sid: str) -> None:
     redis = await get_redis()
 
     if role == "HOST":
-        room_state = await state.get_room_state(redis, room_code)
-        if room_state and room_state.get("status") == "IN_PROGRESS":
-            # Auto-lock the active question so the timer pauses while the host is away
-            if room_state.get("question_phase") == "QUESTION" and not room_state.get(
-                "question_locked"
-            ):
-                current_q = await state.get_current_question(redis, session_id)
-                if current_q:
-                    started_at = datetime.fromisoformat(current_q["started_at"])
-                    if started_at.tzinfo is None:
-                        started_at = started_at.replace(tzinfo=timezone.utc)
-                    elapsed = (datetime.now(timezone.utc) - started_at).total_seconds()
-                    remaining = max(0.0, current_q["time_limit_seconds"] - elapsed)
-
-                    timer = _timer_tasks.pop(session_id, None)
-                    if timer:
-                        timer.cancel()
-
-                    room_state["question_locked"] = True
-                    room_state["timer_remaining_seconds"] = remaining
-                    room_state["question_locked_by_disconnect"] = True
-                    await state.set_room_state(redis, room_code, room_state)
-
-                    await sio.emit(
-                        E.QUESTION_LOCKED,
-                        {
-                            "questionId": current_q["question_id"],
-                            "remainingSeconds": remaining,
-                        },
-                        to=room_code,
-                    )
-                    logger.info(
-                        "question_auto_locked_host_disconnect",
-                        session_id=session_id,
-                        remaining_seconds=remaining,
-                    )
-
-            abandon_at = (
-                datetime.now(timezone.utc) + timedelta(seconds=_HOST_GRACE_SECONDS)
-            ).isoformat()
-            await sio.emit(E.HOST_DISCONNECTED, {"abandonAt": abandon_at}, to=room_code)
-            task = asyncio.create_task(_host_abandon_task(session_id, room_code))
-            _abandon_tasks[session_id] = task
-            logger.warning("host_disconnected_grace_started", session_id=session_id)
+        async with _host_presence(session_id):
+            await _host_left(redis, sid, session_id, room_code)
     else:
         await state.set_player_connected(redis, session_id, user_id, False)
         player_count = await state.get_player_count(redis, session_id)
@@ -540,24 +658,7 @@ async def on_join_room(sid: str, data: dict) -> None:
                 )
                 return
 
-            # Cancel any pending abandon grace period
-            task = _abandon_tasks.pop(session.id, None)
-            if task:
-                task.cancel()
-
-            await sio.enter_room(sid, room_code)
-            await sio.enter_room(sid, _host_room(room_code))
-            _sid_ctx[sid] = {
-                "user_id": user.id,
-                "role": "HOST",
-                "room_code": room_code,
-                "session_id": session.id,
-            }
-
-            if room_state:
-                room_state["host_sid"] = sid
-                await state.set_room_state(redis, room_code, room_state)
-                await _auto_unlock_for_host(redis, session.id, room_code, room_state)
+            room_state = await _seat_host(sid, user.id, session.id, room_code, redis)
 
             players = await state.get_all_players(redis, session.id)
             current_q = await state.get_current_question(redis, session.id)
@@ -658,6 +759,8 @@ async def on_join_room(sid: str, data: dict) -> None:
                     "currentQuestion": current_q,
                     "hasAnswered": has_answered,
                     "questionLocked": question_locked,
+                    # The grace period is running: the host has gone and not yet returned.
+                    "hostDisconnected": session.id in _abandon_tasks,
                 },
                 to=sid,
             )
@@ -736,24 +839,7 @@ async def on_rejoin_room(sid: str, data: dict) -> None:
             return
 
         if is_host:
-            task = _abandon_tasks.pop(session.id, None)
-            if task:
-                task.cancel()
-                logger.info("host_reconnected_abandon_cancelled", session_id=session.id)
-
-            await sio.enter_room(sid, room_code)
-            await sio.enter_room(sid, _host_room(room_code))
-            _sid_ctx[sid] = {
-                "user_id": user.id,
-                "role": "HOST",
-                "room_code": room_code,
-                "session_id": session.id,
-            }
-
-            if room_state:
-                room_state["host_sid"] = sid
-                await state.set_room_state(redis, room_code, room_state)
-                await _auto_unlock_for_host(redis, session.id, room_code, room_state)
+            room_state = await _seat_host(sid, user.id, session.id, room_code, redis)
 
             players = await state.get_all_players(redis, session.id)
             current_q = await state.get_current_question(redis, session.id)
@@ -839,6 +925,7 @@ async def on_rejoin_room(sid: str, data: dict) -> None:
                     "currentQuestion": current_q,
                     "hasAnswered": has_answered,
                     "questionLocked": question_locked,
+                    "hostDisconnected": session.id in _abandon_tasks,
                 },
                 to=sid,
             )
@@ -870,6 +957,139 @@ async def on_host_advance(sid: str, _data: dict) -> None:
         logger.exception("host_advance_unhandled_error", sid=sid)
 
 
+async def _show_results(
+    sid: str, db, redis, room_code: str, session_id: str, room_state: dict
+) -> None:
+    """QUESTION → RESULTS. Closes the question and makes sure every answer that counts is
+    counted, then publishes the results; or, while an answer let in before the close is still
+    being recorded, tells the host (RESULTS_DELAYED) and publishes nothing."""
+    current_q_state = await state.get_current_question(redis, session_id)
+    if not current_q_state:
+        await _emit_error(sid, "No current question found")
+        return
+
+    question = await db.get(Question, current_q_state["question_id"])
+    if not question:
+        await _emit_error(sid, "Question record missing")
+        return
+
+    # No answer may count after the results are read: close the question, and let the
+    # answers already being recorded finish, before reading anything.
+    room_state, pending, closed_now = await _close_answers(
+        db, redis, room_code, session_id, room_state, current_q_state
+    )
+    if pending:
+        # One is still being recorded, and could change these results once it finishes, so
+        # none are published. The question stays closed (the room is told, if this closed
+        # it), and the host can show the results again, or unlock it.
+        if closed_now:
+            await sio.emit(
+                E.QUESTION_LOCKED,
+                {
+                    "questionId": question.id,
+                    "remainingSeconds": room_state["timer_remaining_seconds"],
+                },
+                to=room_code,
+            )
+        await sio.emit(
+            E.RESULTS_DELAYED,
+            {"questionId": question.id, "answersPending": pending},
+            to=_host_room(room_code),
+        )
+        logger.warning(
+            "question_results_delayed", session_id=session_id, answers_pending=pending
+        )
+        return
+
+    # Bulk-fetch per-question points for all players (single query)
+    # Select only columns — not full ORM objects — to avoid triggering
+    # the GameSession.scores backref which causes MissingGreenlet in
+    # async SQLAlchemy when the collection hasn't been eager-loaded.
+    from sqlalchemy import select as sa_select
+    from ..models.session import SessionScore as _Score
+
+    q_score_rows = (
+        await db.execute(
+            sa_select(
+                _Score.user_id,
+                _Score.points_awarded,
+                _Score.answer_data,
+                _Score.is_correct,
+            ).where(
+                _Score.session_id == session_id,
+                _Score.question_id == question.id,
+            )
+        )
+    ).all()
+    # Points, `answered` and ranks come from these rows; totals and the distribution from
+    # Redis. A stored answer Redis hasn't counted (its attempt failed after the commit) is
+    # counted now, so they all agree.
+    await _count_stored_answers(redis, session_id, question, q_score_rows)
+
+    reveal = _answer_reveal(question)
+    answer_dist = await state.get_answer_dist(redis, session_id, question.id)
+    leaderboard = await game_service.get_leaderboard(db, session_id)
+    players = await state.get_all_players(redis, session_id)
+    q_scores: dict[str, int] = {r.user_id: r.points_awarded for r in q_score_rows}
+    # T7: each player's own validated answer and correctness, so the phone's result
+    # screen is self-contained (T7 spec §2.7).
+    q_answers: dict[str, tuple[Any, bool]] = {
+        r.user_id: (r.answer_data, bool(r.is_correct)) for r in q_score_rows
+    }
+    t7_question = question.type in (sort_it.TYPE, spot_it.TYPE)
+
+    # Bar-chart results → host (no player names)
+    await sio.emit(
+        E.QUESTION_RESULTS,
+        {
+            "questionId": question.id,
+            "answerReveal": reveal,
+            "answerDistribution": answer_dist,
+            "totalAnswered": len(q_scores),
+            "totalPlayers": len(players),
+        },
+        to=_host_room(room_code),
+    )
+
+    # Personal result → every player (privacy: no other names/scores exposed)
+    # Use the Redis player list so zero-score players aren't skipped.
+    rank_map = {row["user_id"]: rank + 1 for rank, row in enumerate(leaderboard)}
+    for player in players:
+        uid = player["user_id"]
+        answer = q_answers.get(uid)
+        personal = {
+            "questionId": question.id,
+            "answerReveal": reveal,
+            "yourPoints": q_scores.get(uid, 0),
+            "yourScore": player.get("score", 0),
+            "yourRank": rank_map.get(uid, len(players)),
+            "playerCount": len(players),
+            # Whether the server has this player's answer, for every type: the phone's
+            # "No answer" comes from this, never from its own state or zero points.
+            "answered": answer is not None,
+        }
+        if t7_question:
+            personal.update(
+                {
+                    "questionType": question.type,
+                    "gradingType": question.grading_type,
+                    "pointsValue": question.points_value,
+                    "yourAnswer": answer[0] if answer else None,
+                    "yourIsCorrect": answer[1] if answer else False,
+                }
+            )
+        await sio.emit(E.QUESTION_RESULTS, personal, to=_user_room(uid))
+
+    room_state["question_phase"] = "RESULTS"
+    room_state.pop("question_locked", None)
+    room_state.pop("timer_remaining_seconds", None)
+    room_state.pop("question_locked_by_disconnect", None)
+    await state.set_room_state(redis, room_code, room_state)
+    logger.info(
+        "question_results_shown", session_id=session_id, question_id=question.id
+    )
+
+
 async def _on_host_advance_impl(sid: str) -> None:
     ctx = _sid_ctx.get(sid)
     if not ctx or ctx["role"] != "HOST":
@@ -898,101 +1118,18 @@ async def _on_host_advance_impl(sid: str) -> None:
 
         # ── Phase: QUESTION → RESULTS ────────────────────────────────────────
         if question_phase == "QUESTION":
-            current_q_state = await state.get_current_question(redis, session_id)
-            if not current_q_state:
-                await _emit_error(sid, "No current question found")
-                return
-
-            question = await db.get(Question, current_q_state["question_id"])
-            if not question:
-                await _emit_error(sid, "Question record missing")
-                return
-
-            reveal = _answer_reveal(question)
-            answer_dist = await state.get_answer_dist(redis, session_id, question.id)
-            leaderboard = await game_service.get_leaderboard(db, session_id)
-            players = await state.get_all_players(redis, session_id)
-
-            # Bulk-fetch per-question points for all players (single query)
-            # Select only columns — not full ORM objects — to avoid triggering
-            # the GameSession.scores backref which causes MissingGreenlet in
-            # async SQLAlchemy when the collection hasn't been eager-loaded.
-            from sqlalchemy import select as sa_select
-            from ..models.session import SessionScore as _Score
-
-            q_score_rows = (
-                await db.execute(
-                    sa_select(
-                        _Score.user_id,
-                        _Score.points_awarded,
-                        _Score.answer_data,
-                        _Score.is_correct,
-                    ).where(
-                        _Score.session_id == session_id,
-                        _Score.question_id == question.id,
-                    )
+            if session_id in _results_building:
+                # Another Show Results (a double click, a retry) is still being handled: its
+                # outcome — the results, or RESULTS_DELAYED — is on its way.
+                logger.info(
+                    "host_advance_results_already_building", session_id=session_id
                 )
-            ).all()
-            q_scores: dict[str, int] = {
-                r.user_id: r.points_awarded for r in q_score_rows
-            }
-            # T7: each player's own validated answer and correctness, so the phone's result
-            # screen is self-contained (T7 spec §2.7).
-            q_answers: dict[str, tuple[Any, bool]] = {
-                r.user_id: (r.answer_data, bool(r.is_correct)) for r in q_score_rows
-            }
-            t7_question = question.type in (sort_it.TYPE, spot_it.TYPE)
-
-            # Bar-chart results → host (no player names)
-            await sio.emit(
-                E.QUESTION_RESULTS,
-                {
-                    "questionId": question.id,
-                    "answerReveal": reveal,
-                    "answerDistribution": answer_dist,
-                    "totalAnswered": len(q_scores),
-                    "totalPlayers": len(players),
-                },
-                to=_host_room(room_code),
-            )
-
-            # Personal result → every player (privacy: no other names/scores exposed)
-            # Use the Redis player list so zero-score players aren't skipped.
-            rank_map = {
-                row["user_id"]: rank + 1 for rank, row in enumerate(leaderboard)
-            }
-            for player in players:
-                uid = player["user_id"]
-                personal = {
-                    "questionId": question.id,
-                    "answerReveal": reveal,
-                    "yourPoints": q_scores.get(uid, 0),
-                    "yourScore": player.get("score", 0),
-                    "yourRank": rank_map.get(uid, len(players)),
-                    "playerCount": len(players),
-                }
-                if t7_question:
-                    answer = q_answers.get(uid)
-                    personal.update(
-                        {
-                            "questionType": question.type,
-                            "gradingType": question.grading_type,
-                            "pointsValue": question.points_value,
-                            "answered": answer is not None,
-                            "yourAnswer": answer[0] if answer else None,
-                            "yourIsCorrect": answer[1] if answer else False,
-                        }
-                    )
-                await sio.emit(E.QUESTION_RESULTS, personal, to=_user_room(uid))
-
-            room_state["question_phase"] = "RESULTS"
-            room_state.pop("question_locked", None)
-            room_state.pop("timer_remaining_seconds", None)
-            room_state.pop("question_locked_by_disconnect", None)
-            await state.set_room_state(redis, room_code, room_state)
-            logger.info(
-                "question_results_shown", session_id=session_id, question_id=question.id
-            )
+                return
+            _results_building.add(session_id)
+            try:
+                await _show_results(sid, db, redis, room_code, session_id, room_state)
+            finally:
+                _results_building.discard(session_id)
             return
 
         # ── Phase: RESULTS or None (Lobby) → advance/start ──────────────────
@@ -1012,6 +1149,11 @@ async def _on_host_advance_impl(sid: str) -> None:
                     # second start, no error.
                     logger.info("host_advance_already_started", session_id=session_id)
                     return
+                # start_game wrote IN_PROGRESS to Redis. Carry on from that record, not the
+                # LOBBY copy read above: writing the copy back left Redis saying LOBBY for the
+                # whole game, which switched off the host-disconnect handling (B2).
+                room_state = await state.get_room_state(redis, room_code) or room_state
+                room_state["status"] = "IN_PROGRESS"
                 question_ids = [q.id for q in questions]
                 room_state["question_ids"] = question_ids
                 next_index = 0
@@ -1135,14 +1277,174 @@ async def _on_host_advance_impl(sid: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+@contextmanager
+def _answer_in_flight(session_id: str):
+    """Register an answer being handled, for showing results to wait on (`_answers_in_flight`)."""
+    done = asyncio.Event()
+    handling = _answers_in_flight.setdefault(session_id, set())
+    handling.add(done)
+    try:
+        yield
+    finally:
+        done.set()
+        handling.discard(done)
+        if not handling and _answers_in_flight.get(session_id) is handling:
+            del _answers_in_flight[session_id]
+
+
+@asynccontextmanager
+async def _answer_turn(
+    sid: str | None, session_id: str, question_id: int, user_id: str
+):
+    """Hold this player's turn at this question (`_answer_turns`), waiting for an earlier
+    attempt's turn to end first. `sid` is the attempt's socket (None: the results' own count
+    of a stored answer)."""
+    key = (session_id, question_id, user_id)
+    entry = _answer_turns.setdefault(key, [asyncio.Lock(), 0])
+    if entry[0].locked():
+        logger.info(
+            "submit_answer_waits_for_earlier_attempt",
+            sid=sid,
+            session_id=session_id,
+            question_id=question_id,
+            user_id=user_id,
+        )
+    entry[1] += 1
+    try:
+        async with entry[0]:
+            yield
+    finally:
+        entry[1] -= 1
+        if entry[1] == 0 and _answer_turns.get(key) is entry:
+            del _answer_turns[key]
+
+
+async def _acknowledge_again(sid: str, question_id: int) -> None:
+    """The server already has this player's answer: say so, without scoring anything."""
+    await sio.emit(
+        E.ANSWER_RECEIVED, {"questionId": question_id, "alreadyAnswered": True}, to=sid
+    )
+
+
+async def _answer_counted(
+    redis, room_code: str, session_id: str, question_id: int, user_id: str
+) -> None:
+    """Tell the host an answer was counted, and end the answer phase once everyone has one."""
+    answered_count = await state.get_answered_count(redis, session_id, question_id)
+    player_count = await state.get_player_count(redis, session_id)
+    await sio.emit(
+        E.ANSWER_STATUS,
+        {
+            "userId": user_id,
+            "answeredCount": answered_count,
+            "totalPlayers": player_count,
+        },
+        to=_host_room(room_code),
+    )
+
+    # If all players have answered, notify host immediately (cancel timer)
+    if await state.all_players_answered(redis, session_id, question_id):
+        timer = _timer_tasks.pop(session_id, None)
+        if timer:
+            timer.cancel()
+        await sio.emit(
+            E.ANSWER_PHASE_ENDED,
+            {
+                "questionId": question_id,
+                "answeredCount": answered_count,
+                "totalPlayers": player_count,
+                "allAnswered": True,
+            },
+            to=_host_room(room_code),
+        )
+
+
+async def _close_answers(
+    db, redis, room_code: str, session_id: str, room_state: dict, current_q: dict
+) -> tuple[dict, int, bool]:
+    """Stop the open question taking answers, then wait for those still being handled.
+
+    Called before results are built: an answer arriving from now on is refused as late
+    (ANSWER_REJECTED "locked"), and one already being recorded is waited for, for up to
+    _ANSWER_DRAIN_SECONDS. Returns the room as stored; how many answers were still being
+    recorded when the wait ended (0 unless it ran out, and then the results must wait); and
+    whether this closed the question (it may have been locked already).
+    """
+    room_state = await state.get_room_state(redis, room_code) or room_state
+    closed_now = not room_state.get("question_locked")
+    if closed_now:
+        # A lock like the host's own, time left included: if the results are delayed, the
+        # host may unlock the question instead, and it resumes where it was.
+        room_state["question_locked"] = True
+        room_state["timer_remaining_seconds"] = _time_left(current_q)
+        await state.set_room_state(redis, room_code, room_state)
+    # End this transaction: its snapshot predates the answers about to be committed, and the
+    # results' reads must see them. (It also frees the connection while waiting.)
+    await db.commit()
+    handling = list(_answers_in_flight.get(session_id, ()))
+    if handling:
+        logger.info(
+            "question_results_wait_for_answers",
+            session_id=session_id,
+            answers=len(handling),
+        )
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*(done.wait() for done in handling)),
+                _ANSWER_DRAIN_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            pass
+    pending = sum(1 for done in handling if not done.is_set())
+    return room_state, pending, closed_now
+
+
+async def _count_stored_answers(
+    redis, session_id: str, question: Question, rows
+) -> None:
+    """Count in Redis each stored answer to the question (`rows`, its session_scores rows)
+    that isn't counted there yet: one whose attempt committed its row and then failed before
+    counting it (record_answer commits first), from a player who hasn't sent it again since.
+    Each is counted in that player's turn at the question, as their retry would be, and
+    `apply_answer` skips an answer already counted, so the two can't both count it."""
+    for row in rows:
+        if await state.has_answered(redis, session_id, question.id, row.user_id):
+            continue
+        async with _answer_turn(None, session_id, question.id, row.user_id):
+            if await game_service.finish_recorded_answer(
+                redis,
+                question,
+                session_id,
+                row.user_id,
+                row.points_awarded,
+                row.answer_data or {},
+            ):
+                logger.warning(
+                    "answer_counted_before_results",
+                    session_id=session_id,
+                    user_id=row.user_id,
+                    question_id=question.id,
+                )
+
+
 @sio.on(E.SUBMIT_ANSWER)
 async def on_submit_answer(sid: str, data: dict) -> None:
     """
     data = {"question_id": int, "answer_data": dict, "answer_time_ms": int | None}
     Scores the answer, persists to MySQL, updates Redis, and notifies client + host.
+
+    Each answer counts once. One player's attempts at a question run one at a time
+    (`_answer_turn`), and each first looks for an earlier attempt's outcome, so an answer sent
+    again after a reconnect, while the first attempt was still in the server or after it
+    failed there, is acknowledged or recorded, never recorded twice.
     """
     ctx = _sid_ctx.get(sid)
-    if not ctx or ctx["role"] != "PLAYER":
+    if not ctx:
+        # Clients wait for SYNC_STATE (sent once the socket is seated) before submitting; an
+        # answer arriving earlier has no room to count in.
+        logger.warning("submit_answer_before_join", sid=sid)
+        return
+    if ctx["role"] != "PLAYER":
         return
 
     user_id = ctx["user_id"]
@@ -1157,23 +1459,100 @@ async def on_submit_answer(sid: str, data: dict) -> None:
         await _emit_error(sid, "question_id must be an integer")
         return
 
+    with _answer_in_flight(session_id):
+        async with _answer_turn(sid, session_id, question_id, user_id):
+            try:
+                await _handle_answer(
+                    sid,
+                    user_id,
+                    room_code,
+                    session_id,
+                    question_id,
+                    answer_data,
+                    answer_time_ms,
+                )
+            except Exception:
+                # A database or Redis failure mid-attempt: nothing is acknowledged. What it
+                # left (nothing, or a committed row not yet counted) is completed by the
+                # player's retry after a reconnect, or by the results.
+                logger.exception(
+                    "submit_answer_failed",
+                    sid=sid,
+                    session_id=session_id,
+                    question_id=question_id,
+                    user_id=user_id,
+                )
+
+
+async def _handle_answer(
+    sid: str,
+    user_id: str,
+    room_code: str,
+    session_id: str,
+    question_id: int,
+    answer_data: dict,
+    answer_time_ms: int | None,
+) -> None:
+    """One attempt at an answer, run in the player's turn at the question."""
+    redis = await get_redis()
+
+    # An answer the server already counted is acknowledged again, whatever has happened since
+    # (a lock, results): a retry of an answer that counted is never told it came too late.
+    if await state.has_answered(redis, session_id, question_id, user_id):
+        await _acknowledge_again(sid, question_id)
+        return
+
     async with _db() as db:
-        redis = await get_redis()
+        # An earlier attempt may have committed its row and failed before counting it in Redis
+        # (record_answer commits first): count that row now rather than record a second one.
+        stored = await game_service.recorded_answer(
+            db, session_id, user_id, question_id
+        )
+        if stored is not None:
+            question = await db.get(Question, question_id)
+            counted = (
+                question is not None
+                and await game_service.finish_recorded_answer(
+                    redis,
+                    question,
+                    session_id,
+                    user_id,
+                    stored.points_awarded,
+                    stored.answer_data or {},
+                )
+            )
+            await _acknowledge_again(sid, question_id)
+            if counted:
+                logger.warning(
+                    "answer_counted_on_retry",
+                    session_id=session_id,
+                    user_id=user_id,
+                    question_id=question_id,
+                )
+                current = await state.get_current_question(redis, session_id)
+                if current and current["question_id"] == question_id:
+                    await _answer_counted(
+                        redis, room_code, session_id, question_id, user_id
+                    )
+            return
 
         room_state = await state.get_room_state(redis, room_code)
-        if not room_state or room_state.get("question_phase") != "QUESTION":
+        if not room_state:  # the room itself is gone: a session failure
+            await _emit_error(sid, "No active question")
+            return
+        if room_state.get("question_phase") != "QUESTION":
             if settings.is_stress_test_mode:
                 logger.warning(
                     "submit_answer_no_active_question",
                     sid=sid,
                     session_id=session_id,
-                    phase=room_state.get("question_phase") if room_state else None,
+                    phase=room_state.get("question_phase"),
                 )
-            await _emit_error(sid, "No active question")
+            await _reject_answer(sid, question_id, "closed", "No active question")
             return
 
         if room_state.get("question_locked"):
-            await _emit_error(sid, "Question is locked")
+            await _reject_answer(sid, question_id, "locked", "Question is locked")
             return
 
         current_q_state = await state.get_current_question(redis, session_id)
@@ -1188,15 +1567,11 @@ async def on_submit_answer(sid: str, data: dict) -> None:
                     else None,
                     received=question_id,
                 )
-            await _emit_error(sid, "Question ID does not match the active question")
-            return
-
-        # Idempotent: acknowledge but don't double-score
-        if await state.has_answered(redis, session_id, question_id, user_id):
-            await sio.emit(
-                E.ANSWER_RECEIVED,
-                {"questionId": question_id, "alreadyAnswered": True},
-                to=sid,
+            await _reject_answer(
+                sid,
+                question_id,
+                "closed",
+                "Question ID does not match the active question",
             )
             return
 
@@ -1233,6 +1608,7 @@ async def on_submit_answer(sid: str, data: dict) -> None:
                 )
                 return
 
+        # Commits the row, then counts it in Redis: acknowledged below only once both are done.
         result = await game_service.record_answer(
             db, redis, session_id, user_id, question, answer_data, answer_time_ms
         )
@@ -1253,35 +1629,7 @@ async def on_submit_answer(sid: str, data: dict) -> None:
             },
             to=sid,
         )
-
-        # Notify host of updated answer count
-        answered_count = await state.get_answered_count(redis, session_id, question_id)
-        player_count = await state.get_player_count(redis, session_id)
-        await sio.emit(
-            E.ANSWER_STATUS,
-            {
-                "userId": user_id,
-                "answeredCount": answered_count,
-                "totalPlayers": player_count,
-            },
-            to=_host_room(room_code),
-        )
-
-        # If all players have answered, notify host immediately (cancel timer)
-        if await state.all_players_answered(redis, session_id, question_id):
-            timer = _timer_tasks.pop(session_id, None)
-            if timer:
-                timer.cancel()
-            await sio.emit(
-                E.ANSWER_PHASE_ENDED,
-                {
-                    "questionId": question_id,
-                    "answeredCount": answered_count,
-                    "totalPlayers": player_count,
-                    "allAnswered": True,
-                },
-                to=_host_room(room_code),
-            )
+        await _answer_counted(redis, room_code, session_id, question_id, user_id)
 
         await state.refresh_room_ttl(redis, room_code)
         _ans_log: dict = {
@@ -1321,6 +1669,12 @@ async def _on_lock_question_impl(sid: str) -> None:
     room_code = ctx["room_code"]
     session_id = ctx["session_id"]
 
+    if session_id in _results_building:
+        # Show Results closed the question and is still handling it: an unlock now would let
+        # answers in under the results being read.
+        logger.info("host_lock_ignored_results_building", session_id=session_id)
+        return
+
     redis = await get_redis()
     room_state = await state.get_room_state(redis, room_code)
 
@@ -1335,11 +1689,7 @@ async def _on_lock_question_impl(sid: str) -> None:
     room_state["question_locked"] = new_locked
 
     if new_locked:
-        started_at = datetime.fromisoformat(current_q["started_at"])
-        if started_at.tzinfo is None:
-            started_at = started_at.replace(tzinfo=timezone.utc)
-        elapsed = (datetime.now(timezone.utc) - started_at).total_seconds()
-        remaining = max(0.0, current_q["time_limit_seconds"] - elapsed)
+        remaining = _time_left(current_q)
         room_state["timer_remaining_seconds"] = remaining
 
         timer = _timer_tasks.pop(session_id, None)

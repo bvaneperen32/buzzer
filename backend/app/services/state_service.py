@@ -17,6 +17,7 @@ from datetime import datetime
 
 import structlog
 from redis.asyncio import Redis
+from redis.exceptions import WatchError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -111,27 +112,27 @@ async def add_player(
     await redis.set(_player_key(session_id, user_id), json.dumps(player_data))
 
 
-async def update_player_score(
-    redis: Redis, session_id: str, user_id: str, delta: int
-) -> int:
-    """Add delta to a player's score and return the new total."""
-    raw = await redis.get(_player_key(session_id, user_id))
-    if not raw:
-        return 0
-    data = json.loads(raw)
-    data["score"] = data.get("score", 0) + delta
-    await redis.set(_player_key(session_id, user_id), json.dumps(data))
-    return data["score"]
-
-
 async def set_player_connected(
     redis: Redis, session_id: str, user_id: str, connected: bool
 ) -> None:
-    raw = await redis.get(_player_key(session_id, user_id))
-    if raw:
-        data = json.loads(raw)
-        data["is_connected"] = connected
-        await redis.set(_player_key(session_id, user_id), json.dumps(data))
+    """Set the player's connected flag. The record is watched, like `apply_answer`'s, so a
+    reconnect's write and an answer's score can't overwrite each other."""
+    key = _player_key(session_id, user_id)
+    async with redis.pipeline(transaction=True) as pipe:
+        while True:
+            try:
+                await pipe.watch(key)
+                raw = await pipe.get(key)
+                if not raw:
+                    return
+                data = json.loads(raw)
+                data["is_connected"] = connected
+                pipe.multi()
+                pipe.set(key, json.dumps(data))
+                await pipe.execute()
+                return
+            except WatchError:
+                continue  # the record changed since it was read: read it again
 
 
 async def remove_player(redis: Redis, session_id: str, user_id: str) -> None:
@@ -192,10 +193,46 @@ async def get_current_question(redis: Redis, session_id: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
-async def mark_answered(
-    redis: Redis, session_id: str, question_id: int, user_id: str
-) -> None:
-    await redis.sadd(_answered_key(session_id, question_id), user_id)
+async def apply_answer(
+    redis: Redis,
+    session_id: str,
+    question_id: int,
+    user_id: str,
+    points: float,
+    dist_keys: list[str],
+) -> bool:
+    """Count a recorded answer: add its points to the player's running score, mark the player
+    answered, and add one to each of its distribution counters. Returns False, changing
+    nothing, if the player is already marked answered.
+
+    The three changes go in one MULTI/EXEC, so they land together or not at all, and the
+    answered mark means the answer's score and distribution are counted. The player's record
+    is watched: another write to it between the read and the EXEC (the connected flag, on a
+    join or a disconnect) makes this read it again instead of overwriting that write. The
+    already-answered check relies on the gateway running one player's attempts at a question
+    one at a time.
+    """
+    player_key = _player_key(session_id, user_id)
+    answered_key = _answered_key(session_id, question_id)
+    async with redis.pipeline(transaction=True) as pipe:
+        while True:
+            try:
+                await pipe.watch(player_key)
+                if await pipe.sismember(answered_key, user_id):
+                    return False
+                raw = await pipe.get(player_key)
+                pipe.multi()
+                if raw:  # a player whose record is gone keeps no running score
+                    data = json.loads(raw)
+                    data["score"] = data.get("score", 0) + points
+                    pipe.set(player_key, json.dumps(data))
+                pipe.sadd(answered_key, user_id)
+                for key in dist_keys:
+                    pipe.hincrby(_dist_key(session_id, question_id), key, 1)
+                await pipe.execute()
+                return True
+            except WatchError:
+                continue  # the record changed since it was read: read it again
 
 
 async def has_answered(
@@ -206,13 +243,6 @@ async def has_answered(
 
 async def get_answered_count(redis: Redis, session_id: str, question_id: int) -> int:
     return await redis.scard(_answered_key(session_id, question_id))
-
-
-async def increment_answer_dist(
-    redis: Redis, session_id: str, question_id: int, answer_key: str
-) -> None:
-    """Increment the per-option counter for a question's answer distribution."""
-    await redis.hincrby(_dist_key(session_id, question_id), answer_key, 1)
 
 
 async def get_answer_dist(

@@ -847,10 +847,10 @@ After implementation, update — by editing only what's stale — these `CLAUDE.
 
 - `alembic upgrade head` on a fresh database, and on an existing database that has games
   (existing games show `course_id = NULL`). `alembic downgrade -1` then `upgrade head` works.
-- `cd tests/integration && pytest -v` against the compose stack: the existing game-flow tests
-  still pass unchanged apart from the Section 5.10 input adjustments, and all of
-  `test_t4_access.py` passes. Run with `--fast` as well.
-- `cd tests/unit && pytest -v` passes (CI runs it too).
+- `cd tests/integration && python -m pytest -v` (venv active) against the compose stack: the
+  existing game-flow tests still pass unchanged apart from the Section 5.10 input adjustments,
+  and all of `test_t4_access.py` passes. Run with `--fast` as well.
+- `cd tests/unit && PYTHONPATH=../../backend python -m pytest -v` passes (CI runs it too).
 - `ruff check backend/ scripts/` and `ruff format --check backend/ scripts/`; `tsc --noEmit` in
   each of the three apps.
 - Manual pass under nginx (`npm run build`, then `http://localhost:8080`):

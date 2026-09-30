@@ -15,6 +15,7 @@ import type {
   PlayerJoinedPayload,
   PlayerLeftPayload,
   QuestionPayload,
+  ResultsDelayedPayload,
   SyncStatePayload,
 } from '../../types/game';
 import type { LinkEntry } from '../../types/images';
@@ -39,6 +40,12 @@ interface GameContextValue {
   gameOver: HostGameOverPayload | null;
   autoAdvance: boolean;
   setAutoAdvance: (v: boolean) => void;
+  /** The server has seated this projector in the room (its sync_state arrived since the last
+   *  connect). Until then every control is disabled, and emits are dropped, never queued. */
+  canControl: boolean;
+  /** The last Show Results was held back (`results_delayed`): an answer was still being
+   *  recorded. Cleared by the results, the next question, or an unlock. */
+  resultsDelayed: boolean;
   emitAdvance: () => void;
   emitLockQuestion: () => void;
   /** The session link map: every image of the game, by id as a string (T8). */
@@ -64,8 +71,14 @@ export function useGame(): GameContextValue {
 export default function GameLayout() {
   const { code = '' } = useParams<{ code: string }>();
   const navigate = useNavigate();
+  // React Router gives `navigate` a new identity on every pathname change. The socket effect
+  // must not depend on it, or every screen change re-creates the socket (B1); its handlers
+  // reach the current one through this ref instead.
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
   const socketRef = useRef<Socket | null>(null);
   const currentQuestionIdRef = useRef<number | null>(null);
+  const canControlRef = useRef(false);
 
   const [phase, setPhase] = useState<HostPhase>('lobby');
   const [gameTitle, setGameTitle] = useState('');
@@ -80,6 +93,11 @@ export default function GameLayout() {
   const [questionResults, setQuestionResults] = useState<HostResultsPayload | null>(null);
   const [gameOver, setGameOver] = useState<HostGameOverPayload | null>(null);
   const [autoAdvance, setAutoAdvance] = useState(false);
+  // Connection lost after the game screen was up: socket.io is retrying. Shown as a banner, so
+  // the screen underneath stays mounted.
+  const [reconnecting, setReconnecting] = useState(false);
+  const [canControl, setCanControlState] = useState(false);
+  const [resultsDelayed, setResultsDelayed] = useState(false);
   const [error, setError] = useState('');
   const [sessionId, setSessionId] = useState<string | null>(null);
 
@@ -93,10 +111,16 @@ export default function GameLayout() {
   refreshImageLinksRef.current = refreshImageLinks;
   const refreshedForQuestion = useRef<number | null>(null);
 
+  function setCanControl(value: boolean) {
+    canControlRef.current = value;
+    setCanControlState(value);
+  }
+
   useEffect(() => {
+    const go = (to: string, options?: { replace?: boolean }) => navigateRef.current(to, options);
     const token = localStorage.getItem('token');
     if (!token || !code) {
-      navigate('/home', { replace: true });
+      go('/home', { replace: true });
       return;
     }
 
@@ -117,22 +141,39 @@ export default function GameLayout() {
     let connectedBefore = false;
     sock.on('connect', () => {
       setError('');
+      setCanControl(false); // until the server confirms the rejoin
       sock.emit('join_room', { room_code: code, role: 'HOST' });
       // Links may have expired while the socket was down.
       if (connectedBefore) void refreshImageLinksRef.current();
       connectedBefore = true;
     });
 
+    // `sock.active`: socket.io will keep retrying. It doesn't after our own disconnect (leaving
+    // the game) or a connection the server refused.
+    sock.on('disconnect', () => {
+      setCanControl(false);
+      if (sock.active) setReconnecting(true);
+    });
+
     sock.on('connect_error', (err) => {
-      setError(`Connection error: ${err.message}`);
+      // A failed retry after a lost connection isn't fatal: socket.io keeps retrying.
+      if (connectedBefore && sock.active) {
+        setReconnecting(true);
+      } else {
+        setReconnecting(false);
+        setError(`Connection error: ${err.message}`);
+      }
     });
 
     sock.on('sync_state', (data: SyncStatePayload) => {
+      setCanControl(true); // seated in the room again: the controls work
+      setReconnecting(false);
+      setResultsDelayed(false); // a Show Results from here on gets its own outcome
       setPlayers(data.players ?? []);
       setPlayerCount(data.playerCount ?? data.players?.length ?? 0);
       if (data.status === 'LOBBY') {
         setPhase('lobby');
-        navigate(`/game/${code}/lobby`, { replace: true });
+        go(`/game/${code}/lobby`, { replace: true });
       } else if (data.status === 'IN_PROGRESS') {
         if (data.currentQuestion) {
           setCurrentQuestion(data.currentQuestion);
@@ -144,10 +185,10 @@ export default function GameLayout() {
         }
         if (data.questionPhase === 'QUESTION') {
           setPhase('question');
-          navigate(`/game/${code}/question`, { replace: true });
+          go(`/game/${code}/question`, { replace: true });
         } else if (data.questionPhase === 'RESULTS') {
           setPhase('results');
-          navigate(`/game/${code}/results`, { replace: true });
+          go(`/game/${code}/results`, { replace: true });
         }
       }
     });
@@ -175,8 +216,9 @@ export default function GameLayout() {
       setQuestionLocked(false);
       setLockedTimerSeconds(null);
       setQuestionResults(null);
+      setResultsDelayed(false);
       setPhase('question');
-      navigate(`/game/${code}/question`);
+      go(`/game/${code}/question`);
     });
 
     sock.on('answer_status', (data: AnswerStatusPayload) => {
@@ -201,22 +243,30 @@ export default function GameLayout() {
     sock.on('question_unlocked', () => {
       setQuestionLocked(false);
       setLockedTimerSeconds(null);
+      setResultsDelayed(false);
+    });
+
+    // Not an error: an answer was still being recorded, so the server held the results back.
+    // The question stays closed, and Show Results can be pressed again.
+    sock.on('results_delayed', (data: ResultsDelayedPayload) => {
+      if (data.questionId === currentQuestionIdRef.current) setResultsDelayed(true);
     });
 
     sock.on('question_results', (data: HostResultsPayload) => {
+      setResultsDelayed(false);
       setQuestionResults(data);
       setPhase('results');
-      navigate(`/game/${code}/results`);
+      go(`/game/${code}/results`);
     });
 
     sock.on('game_over', (data: HostGameOverPayload) => {
       setGameOver(data);
       setPhase('gameover');
-      navigate(`/game/${code}/gameover`);
+      go(`/game/${code}/gameover`);
     });
 
     sock.on('game_abandoned', () => {
-      navigate('/home', { replace: true });
+      go('/home', { replace: true });
     });
 
     sock.on('error', (data: { message: string }) => {
@@ -224,10 +274,12 @@ export default function GameLayout() {
     });
 
     return () => {
+      // Drop the listeners first, so nothing this socket still delivers can change state.
+      sock.off();
       sock.disconnect();
-      socketRef.current = null;
+      if (socketRef.current === sock) socketRef.current = null;
     };
-  }, [code, navigate]);
+  }, [code]);
 
   // A question that uses an image the map doesn't have yet (uploaded after the map was fetched)
   // gets one refresh; an id still missing afterwards is treated as no image.
@@ -243,12 +295,14 @@ export default function GameLayout() {
     }
   }, [currentQuestion, sessionId, imageLinks, refreshImageLinks]);
 
+  // Dropped, not queued, while the projector isn't seated: a Next or Lock sent then would reach
+  // a server that ignores it — or, buffered, land after the rejoin as a stale action.
   const emitAdvance = useCallback(() => {
-    socketRef.current?.emit('host_advance', {});
+    if (canControlRef.current) socketRef.current?.emit('host_advance', {});
   }, []);
 
   const emitLockQuestion = useCallback(() => {
-    socketRef.current?.emit('host_lock_question', {});
+    if (canControlRef.current) socketRef.current?.emit('host_lock_question', {});
   }, []);
 
   if (error) {
@@ -268,8 +322,13 @@ export default function GameLayout() {
 
   return (
     <GameContext.Provider
-      value={{ phase, roomCode: code, gameTitle, players, playerCount, currentQuestion, answeredCount, allAnswered, answerPhaseEnded, questionLocked, lockedTimerSeconds, questionResults, gameOver, autoAdvance, setAutoAdvance, emitAdvance, emitLockQuestion, imageLinks, refreshImageLinks, imageLinksFailed }}
+      value={{ phase, roomCode: code, gameTitle, players, playerCount, currentQuestion, answeredCount, allAnswered, answerPhaseEnded, questionLocked, lockedTimerSeconds, questionResults, gameOver, autoAdvance, setAutoAdvance, canControl, resultsDelayed, emitAdvance, emitLockQuestion, imageLinks, refreshImageLinks, imageLinksFailed }}
     >
+      {reconnecting && (
+        <div role="status" className="fixed top-0 inset-x-0 bg-slate-700/95 text-slate-100 text-center py-2 text-lg z-50">
+          Connection lost — reconnecting… Controls are paused until the game is back.
+        </div>
+      )}
       <Outlet />
 
       {/* Persistent join panel — always visible in the bottom-right corner */}

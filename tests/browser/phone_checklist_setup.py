@@ -1,10 +1,22 @@
 """Create the test game for the physical-phone checklist (spec §4.7): "T7 phone checklist".
 
-    python tests/browser/phone_checklist_setup.py [--replace]
+    python tests/browser/phone_checklist_setup.py [--replace] [--game-id N]
+    python tests/browser/phone_checklist_setup.py --cleanup [--game-id N]
 
 Same configuration as the browser checks (README.md): BUZZER_BROWSER_BASE_URL and the admin
-credentials. The game is kept for re-runs. With --replace, an existing game of this title in the
-course is deleted first, with its sessions and scores.
+credentials. The game is kept for re-runs, in a kept ownership ledger
+(`phone-checklist.json` in the ledger directory, `tests/.ledgers/` by default) that
+`tests/cleanup.py` never touches.
+
+- `--replace` deletes the checklist game first, with its sessions and scores, and creates it
+  again.
+- `--cleanup` is the explicit cleanup step. It deletes the game, and the course if this script
+  created it.
+- Both delete only a game the ledger owns, or the one whose id is given with `--game-id` (a game
+  created before the ledger existed). The game must still have the checklist's title in the
+  checklist's course.
+- A course this script didn't create, and guests who joined from phones, are reported, never
+  deleted.
 """
 
 from __future__ import annotations
@@ -17,7 +29,8 @@ import sys
 
 from PIL import Image, ImageDraw
 
-from bc_common import BASE, Api, cell, sort_body, spot_body, stamp
+from bc_common import BASE, LEDGERS, Api, cell, sort_body, spot_body, stamp
+from tests.ledger import Ledger, teardown
 
 COURSE = {"name": "T7 phone checklist", "semester": "Physical phone"}
 TITLE = "T7 phone checklist"
@@ -101,25 +114,74 @@ def night_sky() -> bytes:
     return _png(img)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--replace", action="store_true", help="delete an existing game of this title in the course first")
-    args = parser.parse_args()
-
-    api = Api()
+def checklist_course(api: Api, *, create: bool) -> int | None:
+    """The ledger's course if it still exists, else one matching exactly (reused, not owned),
+    else — with `create` — a new, owned one."""
+    for record in api.ledger.records("courses"):
+        r = api.req("GET", f"/api/admin/courses/{record['id']}")
+        if r.status_code == 200 and (r.json()["name"], r.json()["semester"]) == (record["name"], record["semester"]):
+            return record["id"]
     course = next((c for c in api.ok("GET", "/api/admin/courses")
                    if c["name"] == COURSE["name"] and c["semester"] == COURSE["semester"]), None)
-    if course is None:
-        course = api.ok("POST", "/api/admin/courses", 201, json=COURSE)
-    existing = [g for g in api.ok("GET", "/api/admin/games") if g["title"] == TITLE and g["course_id"] == course["id"]]
+    if course is not None:
+        return course["id"]
+    return api.course(COURSE["name"], COURSE["semester"]) if create else None
+
+
+def take_games(api: Api, course_id: int, game_id: int | None) -> list[dict]:
+    """The checklist games in the course. The one named by --game-id is put in the ledger;
+    any other game the ledger doesn't own is reported and exits."""
+    games = [g for g in api.ok("GET", "/api/admin/games") if g["title"] == TITLE and g["course_id"] == course_id]
+    owned = {r["id"] for r in api.ledger.records("games")}
+    if game_id is not None and game_id not in owned:
+        if not any(g["id"] == game_id for g in games):
+            sys.exit(f'Game {game_id} isn\'t "{TITLE}" in the checklist course; nothing deleted.')
+        api.ledger.record("games", id=game_id, title=TITLE, adopted=True)  # named by the person
+        owned.add(game_id)
+    untracked = [g["id"] for g in games if g["id"] not in owned]
+    if untracked:
+        sys.exit(f'"{TITLE}" game(s) {untracked} predate the ownership ledger, so they aren\'t deleted '
+                 "automatically. Pass --game-id <id> to name the one to delete.")
+    return games
+
+
+def cleanup(api: Api, game_id: int | None) -> None:
+    course_id = checklist_course(api, create=False)
+    if course_id is not None:
+        take_games(api, course_id, game_id)
+    owned_course = any(r["id"] == course_id for r in api.ledger.records("courses"))
+    print(f"Deleting: {api.ledger.summary()}")
+    problems = teardown(api.ledger, api.http, api.token)
+    for problem in problems:
+        print(f"  KEPT {problem}")
+    if course_id is not None and not owned_course:
+        print(f'Course {course_id} ("{COURSE["name"]} ({COURSE["semester"]})") was not created by this script; '
+              "it is kept.")
+    print("Guests who joined from phones signed in through the app, so they aren't owned here; "
+          "the admin console lists guests.")
+    sys.exit(1 if problems else 0)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--replace", action="store_true", help="delete the checklist game first, then create it again")
+    parser.add_argument("--cleanup", action="store_true", help="delete the checklist game (and its course, if created here)")
+    parser.add_argument("--game-id", type=int, help="a checklist game created before the ledger, to delete")
+    args = parser.parse_args()
+
+    ledger = Ledger.begin(LEDGERS, "phone_checklist_setup", base_url=BASE, name="phone-checklist", keep=True)
+    api = Api(ledger)
+    if args.cleanup:
+        cleanup(api, args.game_id)
+    course_id = checklist_course(api, create=True)
+    existing = take_games(api, course_id, args.game_id) if args.replace else [
+        g for g in api.ok("GET", "/api/admin/games") if g["title"] == TITLE and g["course_id"] == course_id]
     if existing and not args.replace:
         sys.exit(f'"{TITLE}" already exists (game {existing[0]["id"]}); pass --replace to recreate it.')
     for game in existing:
         api.ok("DELETE", f"/api/admin/games/{game['id']}", 204)
-    game_id = api.ok("POST", "/api/admin/games", 201, json={
-        "title": TITLE, "course_id": course["id"],
-        "description": "Sort It and Spot It on a real phone (T7 spec §4.7)",
-    })["id"]
+        ledger.forget("games", game["id"])
+    game_id = api.game(course_id, TITLE, description="Sort It and Spot It on a real phone (T7 spec §4.7)")
 
     harbour_id = api.upload(game_id, harbour(), "Harbour at dusk with boats and a lighthouse", "harbour.png")["id"]
     sky_id = api.upload(game_id, night_sky(), "Night sky over a city", "night-sky.png")["id"]
@@ -162,7 +224,7 @@ def main() -> None:
         4: "Land: Cat, Dog · Sea: Shark, Eel (one card wrong → 2.6 of 5.1)",
         7: "H2 or H3",
     }
-    print(f'Created "{TITLE}" (game {game_id}) in "{COURSE["name"]} ({COURSE["semester"]})":')
+    print(f'Created "{TITLE}" (game {game_id}) in "{COURSE["name"]} ({COURSE["semester"]})" (course {course_id}):')
     for number, (what, use, _) in enumerate(questions, start=1):
         answer = f" — answer: {answers[number]}" if number in answers else ""
         print(f"  Q{number}  {what}; checklist {use}{answer}")

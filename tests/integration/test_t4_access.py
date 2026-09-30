@@ -7,11 +7,12 @@ rule, grant side effects, session downloads and deletes, the socket HOST join,
 guest refusal, and /api/auth/me. Runs against the compose dev stack, where
 APP_ENV=development disables login rate limiting:
 
-    cd tests/integration && pytest test_t4_access.py -v
+    cd tests/integration && python -m pytest test_t4_access.py -v
 
 Each test creates its own users, courses, games, and rooms through the API and
-removes them afterwards (see the `t4` fixture). Courses have no delete endpoint,
-so, as in conftest's game_setup, they're left behind as inert records.
+removes them afterwards: the `t4` fixture deletes rooms, games and users, and the
+suite's ownership tracking (conftest.py, "Test data") everything else, courses
+and guests included.
 
 Commit timing: the backend's get_db dependency commits *after* the response has
 been sent, so for endpoints that rely on it (grants, revokes, PUT, DELETE,
@@ -29,7 +30,7 @@ import uuid
 import httpx
 import pytest
 
-from .conftest import create_guest_tokens, create_questions
+from .conftest import create_guest_tokens, create_questions, mint_guest_email
 from .engine.orchestrator import run_game
 from .engine.socket_client import TestSocketClient as SocketClient
 from .scenarios.all_question_types import SINGLE_PLAYER
@@ -1123,7 +1124,8 @@ def test_questions_are_scoped_to_the_game_in_the_url(t4):
             id="wrong-format",
         ),
         pytest.param(
-            json.dumps({**_BASE_BUNDLE, "version": 2}).encode(),
+            # Version 2 became valid with T8 (bundles with images); 3 is unsupported.
+            json.dumps({**_BASE_BUNDLE, "version": 3}).encode(),
             "Unsupported version",
             id="wrong-version",
         ),
@@ -1358,7 +1360,7 @@ def test_me_reports_a_guest(t4):
         "/api/auth/guest",
         json={
             "display_name": "T4 Guest",
-            "email": f"t4me{t4.tag}@example.com",
+            "email": mint_guest_email("t4me"),
             "room_code": room_code,
         },
     )
