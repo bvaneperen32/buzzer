@@ -27,12 +27,19 @@ interface ImageLibraryPanelProps {
   refresh: () => Promise<void>;
 }
 
-/** "Used by Q2 (prompt), Q5 (option B)", or "Unused" (question numbers as the list shows them). */
+/** "Used by Q2 (prompt), Q5 (option B), Q7 (Spot It)", or "Unused" (question numbers as the
+ * list shows them). */
 function describeUses(uses: UsedBy[]): string {
   if (uses.length === 0) return 'Unused';
-  return `Used by ${uses
-    .map((u) => `Q${u.number} (${u.role === 'option' ? `option ${u.option_letter}` : u.role})`)
-    .join(', ')}`;
+  const role = (u: UsedBy) =>
+    u.role === 'option' ? `option ${u.option_letter}` : u.role === 'canvas' ? 'Spot It' : u.role;
+  return `Used by ${uses.map((u) => `Q${u.number} (${role(u)})`).join(', ')}`;
+}
+
+/** T7: a replace makes every Spot It question on the image need review ("Q3 (Spot It) will
+ * need review"), because its accepted cells were checked against the old image. */
+function canvasUses(uses: UsedBy[]): string[] {
+  return uses.filter((u) => u.role === 'canvas').map((u) => `Q${u.number} (Spot It)`);
 }
 
 function Meter({ label, value, limit, format }: {
@@ -108,6 +115,7 @@ export function ImageLibraryPanel({
   const [editing, setEditing] = useState<{ id: number; text: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const [replaceTarget, setReplaceTarget] = useState<number | null>(null);
+  const [confirmReplace, setConfirmReplace] = useState<number | null>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
   const replaceRef = useRef<HTMLInputElement>(null);
 
@@ -270,6 +278,27 @@ export function ImageLibraryPanel({
                     <p className={`text-xs ${img.used_by.length ? 'text-slate-300' : 'text-slate-500'}`}>
                       {describeUses(img.used_by)}
                     </p>
+                    {confirmReplace === img.id && (
+                      <div className="flex flex-wrap items-center gap-2 pt-1" role="alert">
+                        <span className="text-amber-300 text-xs">
+                          {canvasUses(img.used_by).join(', ')} will need review: the accepted cells
+                          must be checked against the new image.
+                        </span>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setConfirmReplace(null);
+                            setReplaceTarget(img.id);
+                            replaceRef.current?.click();
+                          }}
+                        >
+                          Choose a file
+                        </Button>
+                        <Button type="button" size="sm" variant="ghost" onClick={() => setConfirmReplace(null)}>Cancel</Button>
+                      </div>
+                    )}
                     {confirmDelete === img.id && (
                       <div className="flex items-center gap-2 pt-1">
                         <span className="text-red-400 text-xs">Delete this image from the library?</span>
@@ -299,6 +328,10 @@ export function ImageLibraryPanel({
                       aria-label={`Replace ${img.description}`}
                       disabled={blocked || busy !== null}
                       onClick={() => {
+                        if (canvasUses(img.used_by).length > 0) {
+                          setConfirmReplace(img.id); // warn first: Spot It questions need review
+                          return;
+                        }
                         setReplaceTarget(img.id);
                         replaceRef.current?.click();
                       }}

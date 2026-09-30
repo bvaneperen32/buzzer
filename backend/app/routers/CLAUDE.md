@@ -109,6 +109,8 @@ gets its own endpoints in `host.py`, and both call the same service functions.
   non-null fields on the stored question and builds a `QuestionCreate` from it, so an edit can't
   leave a question in a state `POST` would reject. Failure is a 422 `UNPROCESSABLE` whose
   `message` joins each error's `msg` with `"; "`. An explicit `null` means "leave unchanged".
+  Question create and update on both routers also take `redis` (`Depends(get_redis)`) and pass
+  it on: T7's live freeze needs the live sessions, which T8 defines by the Redis room.
   Import failures raise the same `UnprocessableError`, so their body is `{"error", "message"}`,
   not the old `{"detail"}`.
 - **Question prompts are bleach-sanitized on write** in exactly one place,

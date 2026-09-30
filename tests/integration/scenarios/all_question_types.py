@@ -285,4 +285,86 @@ FITB_TYPES = GameScenario(
 )
 
 
-SCENARIOS: list[GameScenario] = [ALL_TYPES, SINGLE_PLAYER, FITB_TYPES]
+# ---------------------------------------------------------------------------
+# Scenario — Sort It (T7). Spot It gameplay stays in test_t7_question_types.py, which
+# uploads and confirms an image first.
+# ---------------------------------------------------------------------------
+
+SORT_CARDS = ["Whale", "Gecko", "Frog", "Bat", "Newt", "Tortoise", "Dolphin", "Salamander"]
+
+# k = 3: 6 right, 1 wrong, 1 left out → (6 − 1/2) / 8 = 0.6875 → 687.5 of 1000.
+SORT_ACCURACY_K3 = QuestionSpec(
+    type="sort_into_boxes",
+    grading_type="ACCURACY",
+    prompt="Sort these animals by class.",
+    config={"boxes": ["Mammal", "Reptile", "Amphibian"], "cards": SORT_CARDS},
+    answer_data={"correct_boxes": [0, 1, 2, 0, 2, 1, 0, 2]},
+    points_value=1000,
+)
+
+# k = 2: 6 right, 1 wrong, 1 left out → (6 − 1) / 8 = 0.625 → 625 of 1000.
+SORT_ACCURACY_K2 = QuestionSpec(
+    type="sort_into_boxes",
+    grading_type="ACCURACY",
+    prompt="Land or sea?",
+    config={"boxes": ["Land", "Sea"], "cards": SORT_CARDS},
+    answer_data={"correct_boxes": [1, 0, 0, 0, 1, 0, 1, 0]},
+    points_value=1000,
+)
+
+# COMPLETENESS: any valid board (at least one card placed) earns full points.
+SORT_COMPLETENESS = QuestionSpec(
+    type="sort_into_boxes",
+    grading_type="COMPLETENESS",
+    prompt="Which would you keep as a pet?",
+    config={"boxes": ["Yes", "No"], "cards": ["Cat", "Snake", "Frog", "Goldfish"]},
+    answer_data={},
+    points_value=1000,
+)
+
+
+def _sorted(q: QuestionSpec, right: int, wrong: int) -> dict:
+    """The first `right` cards in their box, the next `wrong` one box over, the rest out."""
+    key = q.answer_data["correct_boxes"]
+    k = len(q.config["boxes"])
+    placements = [
+        correct if i < right else (correct + 1) % k if i < right + wrong else None
+        for i, correct in enumerate(key)
+    ]
+    return {"placements": placements}
+
+
+SORT_IT_TYPES = GameScenario(
+    name="sort_it_variations",
+    description=(
+        "Sort It at k = 3 and k = 2 (ACCURACY) and COMPLETENESS. Scores stay exact in binary "
+        "(625, 687.5, 250), because the game-over assertions compare exactly."
+    ),
+    questions=[SORT_ACCURACY_K3, SORT_ACCURACY_K2, SORT_COMPLETENESS],
+    player_scripts=[
+        # Player 0 — every card right; any board on COMPLETENESS → 3000
+        PlayerScript(responses=[
+            _sorted(SORT_ACCURACY_K3, 8, 0),
+            _sorted(SORT_ACCURACY_K2, 8, 0),
+            {"placements": [0, 1, None, 0]},
+        ]),
+        # Player 1 — 6 right, 1 wrong, 1 left out → 687.5 + 625 + 1000 = 2312.5
+        PlayerScript(responses=[
+            _sorted(SORT_ACCURACY_K3, 6, 1),
+            _sorted(SORT_ACCURACY_K2, 6, 1),
+            {"placements": [None, None, 1, None]},
+        ]),
+        # Player 2 — skips everything → 0
+        PlayerScript(responses=[None, None, None]),
+        # Player 3 — k = 3: 4 right, 4 wrong → (4 − 2) / 8 = 0.25 → 250; k = 2: 2 right,
+        # 6 wrong → floored at 0; skips COMPLETENESS → 250
+        PlayerScript(responses=[
+            _sorted(SORT_ACCURACY_K3, 4, 4),
+            _sorted(SORT_ACCURACY_K2, 2, 6),
+            None,
+        ]),
+    ],
+)
+
+
+SCENARIOS: list[GameScenario] = [ALL_TYPES, SINGLE_PLAYER, FITB_TYPES, SORT_IT_TYPES]

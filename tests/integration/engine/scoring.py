@@ -129,6 +129,20 @@ def compute_question_score(q: QuestionSpec, response: dict | None) -> int:
             return q.points_value
         return 0
 
+    if q.type == "sort_into_boxes":
+        # T7 spec §2.3, written independently: each card placed in its box is +1, in another
+        # box −1/(k−1), left out 0; the question is floored at 0 and scaled by n cards.
+        placements = response.get("placements") or []
+        key = q.answer_data.get("correct_boxes", [])
+        k = len(q.config.get("boxes", []))
+        right = sum(1 for placed, correct in zip(placements, key) if placed == correct)
+        wrong = sum(
+            1
+            for placed, correct in zip(placements, key)
+            if placed is not None and placed != correct
+        )
+        return q.points_value * (max(0.0, right - wrong / (k - 1)) / len(key))
+
     # Unknown question type — extend here when new types are added
     return 0
 
@@ -179,5 +193,10 @@ def _build_reveal(q: QuestionSpec) -> dict:
             "type": "fill_in_the_blank",
             "acceptedAnswers": q.answer_data.get("acceptedAnswers", []),
             "editDistance": q.answer_data.get("editDistance", 0),
+        }
+    if q.type == "sort_into_boxes":
+        return {
+            "type": "sort_into_boxes",
+            "correctBoxes": q.answer_data.get("correct_boxes", []),
         }
     return {}

@@ -25,7 +25,8 @@ export/report generation actually live.
 - `game_lock.py` — T8's concurrency primitive. `lock_game(db, game_id)` is `SELECT … FROM games
   … FOR UPDATE` with `populate_existing` (it refreshes the `Game` the access check loaded);
   `fresh(stmt, exclusive=False)` makes any select a locking read with `populate_existing`
-  (`LOCK IN SHARE MODE`, or `FOR UPDATE` if exclusive); `lock_conflicts()` turns MySQL 1205/1213
+  (a shared lock, which SQLAlchemy renders as `FOR SHARE` on MySQL 8 — T7's lock tests match that
+  text in PROCESSLIST — or `FOR UPDATE` if exclusive); `lock_conflicts()` turns MySQL 1205/1213
   into 409. See [app/CLAUDE.md](../CLAUDE.md) for the rules that use them.
 - `image_refs.py` — pure, imports nothing: the only definition of which `config` keys hold image
   ids (`prompt_image_id`, `option_images`, `image_id`) and their roles. `image_refs` lists the
@@ -35,7 +36,21 @@ export/report generation actually live.
   `json.dumps(…, indent=2, ensure_ascii=False)`), the export repairs for references that don't
   resolve, `bundle_size` (the exact export length without building base64), and `check_export`
   (the export rule). An empty library exports version 1, byte for byte as before; otherwise
-  version 2 with the whole library.
+  version 2 with the whole library. T7: `ImageRecord` also carries each image's `version`,
+  `width` and `height` (required fields), so `build_bundle` can apply `spot_it.export_fields` —
+  Spot It questions export without `width`/`height`, and with `"confirmed": true` only when
+  confirmed against the exported image. Measurement and export share that one transform.
+- `sort_it.py` (T7) — pure, imports nothing from the application: Sort It's rules
+  (`validate`, `parse_answer`, `score` with the corrected-for-guessing credit floored at 0,
+  `dist_keys`, `reveal`, `card_order`) and `results_breakdown`, the per-card percentages the
+  report shows (integer half-up; the host app's `lib/sortResults.ts` is a port). Only `validate`
+  raises; readers of stored data return `None`/empty instead.
+- `spot_it.py` (T7) — pure, imports only `image_refs`: Spot It's grid geometry (`max_grid`,
+  `default_grid`, integer arithmetic — the host app's `lib/spotGrid.ts` copies it for the editor;
+  the player app has no copy), `validate`,
+  `parse_answer`, `score` (set membership), `reveal` (row-major), `review_status` (the one
+  confirmation rule, with reasons in a fixed order), `reason_texts`, and `export_fields`. Readers
+  of stored data never raise; malformed data reads as `not_confirmed`.
 - `image_service.py` — T8's image code, the only code that accepts image bytes. **The pipeline**
   (`process_image`: size, format, pixel check before decoding, conformance, normalization, small
   copy — see its docstring and the spec's §2.5); **capacity** (`PIPELINE_LIMITER`, two slots,
@@ -45,11 +60,17 @@ export/report generation actually live.
   references before changing anything); **links** (`link`, `link_entry`, `verify_link`,
   `session_links`, `player_images`); and **helpers** for others (`export_inputs`,
   `assert_in_library`, `live_sessions`, `images_for_refs`, `get_image_meta` for T7, `data_uri` for
-  the report, `check_bundle_entries` for import). Deadlines are read through one clock function,
-  `_clock`, so tests can move time.
+  the report, `check_bundle_entries` for import, and `live_rooms_text`, the room list T8's live
+  guard and T7's live freeze both print). T7: `export_inputs` selects each image's `version`,
+  `width` and `height`, and `add_image` / `replace_image` measure their pending or substituted
+  record with them (a replace increments the version, which can drop `"confirmed": true`).
+  Deadlines are read through one clock function, `_clock`, so tests can move time.
 - `game_service.py` — the core. Room code generation, the access rules, session lifecycle
   (`create_room` → `start_game` → `complete_game` / `abandon_game`), `authorise_player`,
-  `calculate_score`, `record_answer`, and the leaderboard / game-over summary builders. The
+  `calculate_score`, `record_answer`, and the leaderboard / game-over summary builders. T7: the
+  Spot It room gates (`spot_it_review_blockers`, run in `create_room` after the course check and
+  in `start_game` as a backstop, both reading questions and images fresh under the game lock),
+  and the Sort It / Spot It branches in scoring, answer counts and both summaries. The
   access rules:
   - `has_host_grant` — the single per-resource HOST check (a `user_course_access` row with role
     `HOST`; a `PLAYER` row isn't one). Every rule below uses it, as does the admin router's grant
@@ -75,7 +96,14 @@ export/report generation actually live.
   references, then write the question and apply the export rule to it **as stored**
   (`_as_stored`: flush, refresh, measure — MySQL's `FLOAT` and JSON columns can store a number
   longer than it was sent, e.g. `1e-40` → `9.99995e-41`); a refusal raises and the transaction
-  rolls back. `create_question` takes the next `order_index` from that same fresh list.
+  rolls back. `create_question` takes the next `order_index` from that same fresh list. T7:
+  `create_question` / `update_question` take `redis`. Every Spot It write stores the image's
+  trusted `width`/`height` (even when the request omitted `config`), and a sent stamp is an
+  attempted confirmation (409 if stale, then 422 if the grid doesn't fit); a null stamp is
+  removed before writing. While a session is live, Sort It and Spot It questions are frozen
+  (`_frozen_fields`, compared as stored). Question list and write responses carry
+  `needs_review` / `review_reasons`. Import takes a boolean `answer_data.confirmed` and restamps
+  it against the imported image.
   `import_game` runs the spec's §2.15 order (parse; metadata; image count *before* decoding
   anything; entries; references and questions; the pipeline against a deadline; the budget; then
   create, and the export rule on the created game as stored), all in one transaction, so a
@@ -93,7 +121,11 @@ export/report generation actually live.
   T8: embeds small copies as data URIs (prompt images; option images beside multiple-choice
   bars and in a new multi-select option list), only when `include_images` (the downloader passes
   the game rule now), otherwise the withheld text; images replaced after the session was created
-  carry a note.
+  carry a note. T7: Sort It's per-card table (`_render_sort_table`) and Spot It's heatmap, an
+  inline SVG over the small copy (`_render_spot_svg`) — pure renderers that escape every label
+  and description — plus a note counting stored answers that no longer fit the question, "N%
+  all cards correct" on Sort It's stats line, and T7 questions' maximum points through
+  `format_points` (`Decimal(repr(x))`, half up, never `normalize()`).
 
 ## How it fits in
 
@@ -131,10 +163,12 @@ never the reverse. T8's modules add their own one-way rules, listed in
   the edit makes it valid; the 422 message says why.
 - `delete_question` refuses (409) once any session has answered the question, rather than deleting
   score rows and rewriting past results.
-- **Nothing blocks question edits, reorders, or deletes while a LOBBY or IN_PROGRESS session of
-  the game exists.** That was always true for admins, but hosts — the people running games — now
-  have the same access. A mid-game edit can change what later questions show or how they score.
-  If that bites, the fix is a 409 from these service functions while such a session exists.
+- **Nothing blocks edits, reorders, or deletes of the four original question types while a
+  LOBBY or IN_PROGRESS session of the game exists.** That was always true for admins, but hosts —
+  the people running games — now have the same access. A mid-game edit can change what later
+  questions show or how they score. T7's two types *are* frozen while live (only the prompt, time
+  limit and Sort It's prompt image can change); extending that freeze to the other types is the
+  fix if the hazard bites.
 - `game_created` and `game_imported` are logged inside the service, *before* the router commits,
   so a log line can exist for a create that then fails to commit. Grant revocations log as
   `game_grants_revoked_host_lost` / `game_grants_revoked_game_moved` with the row count.
@@ -165,7 +199,9 @@ never the reverse. T8's modules add their own one-way rules, listed in
 - `calculate_score` clamps `multi_select` to a floor of 0, so negative `answer_points` reduce a
   score but can't drive it below zero.
 - `COMPLETENESS` grading awards full points for *any* non-empty answer and always sets
-  `is_correct=True`.
+  `is_correct=True` — except T7's types, which score in their own modules *before* that shortcut:
+  a malformed answer scores `(0, False)` in either mode. Sort It's `is_correct` means every card
+  in its box (partial credit is `points < points_value` with `is_correct` false).
 
 ### Answer distributions
 

@@ -26,6 +26,8 @@ results, for the courses they HOST. Admins use them too.
   `HostResultsPayload`, `HostGameOverPayload`, the `AnswerReveal` discriminated union, and
   `HostPhase`, plus `QuestionConfig` (with T8's `prompt_image_id` / `option_images`) and the
   `images` map on `QuestionPayload`. Hand-maintained to match the backend; nothing generates it.
+  T7 adds the `QuestionType` union, `GridCell`, the Sort It / Spot It config fields, `cardOrder`,
+  and the two `AnswerReveal` variants.
 - `types/images.ts` — T8's REST types (`ImageItem`, `LibraryResponse`, `LinkEntry`, …, mirroring
   the backend's `schemas/image.py`) and the input and import limits the UI checks before
   uploading.
@@ -35,10 +37,12 @@ results, for the courses they HOST. Admins use them too.
 - [`pages/`](pages/CLAUDE.md) — all screens: `HostShell` and the management pages, plus
   `GameLayout`, which owns the socket and all game state, and its game screens.
 - [`components/`](components/CLAUDE.md) — presentational primitives (`Button`, `Card`, `Input`,
-  `SafeImage`), `TimerBar`, and the editor's image components (`images/`).
+  `SafeImage`), `TimerBar`, the editor's image components (`images/`), and T7's Sort It and
+  Spot It displays (`question/`).
 - [`lib/`](lib/CLAUDE.md) — the REST client (with `ApiError`, uploads, and downloads), the
-  in-memory current-user context (`useMe`), the `cn` class-name helper, and T8's image hooks and
-  helpers (`useImageLibrary`, `useSessionImageLinks`, `questionImages`, `format`).
+  in-memory current-user context (`useMe`), the `cn` class-name helper, T8's image hooks and
+  helpers (`useImageLibrary`, `useSessionImageLinks`, `questionImages`, `format`), and T7's
+  `spotGrid`, `sortResults` and `canvasColors`.
 
 ## Architecture
 
@@ -95,7 +99,7 @@ guarantee:
 
 ### Logic duplicated across the stack
 
-Four pieces of logic exist in both this app and the backend and must be changed together:
+Six pieces of logic exist in both this app and the backend and must be changed together:
 
 - **Levenshtein matching** — here in `ResultsPage`, and twice in the backend.
 - **Histogram bucketing** — `GameOverPage.chooseWidth`/`buildBuckets` mirrors
@@ -107,6 +111,13 @@ Four pieces of logic exist in both this app and the backend and must be changed 
   positive options.
 - **Roster CSV parsing** — `RosterPage`'s wizard reimplements `roster_service`, and they
   title-case differently (see [pages/CLAUDE.md](pages/CLAUDE.md)).
+- **Spot It's grid geometry** (T7) — `lib/spotGrid.ts` copies the backend's `spot_it.max_grid` /
+  `default_grid` in the same integer arithmetic. The editor shows limits from it; the server's
+  confirmation check is authoritative. The player app has no copy of the limits: its
+  `lib/spotGrid.ts` repeats only this file's labels, readers and canvas layout.
+- **Sort It's results percentages** (T7) — `lib/sortResults.ts` ports `sort_it.results_breakdown`
+  (integer half-up percentages, ties to the lowest box). The report uses the Python original; a
+  browser check compares the two on one session.
 
 ### Auth
 

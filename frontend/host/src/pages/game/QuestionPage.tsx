@@ -3,13 +3,17 @@ import { useGame } from './GameLayout';
 import { Button } from '../../components/ui/button';
 import { SafeImage } from '../../components/ui/SafeImage';
 import { TimerBar } from '../../components/ui/TimerBar';
+import { SpotItCanvas } from '../../components/question/SpotItCanvas';
+import { SortItBoard } from '../../components/question/SortItResults';
 import {
+  canvasImageId,
   hasCaption,
   imageOptionName,
   optionImageIds,
   optionLetter,
   promptImageId,
 } from '../../lib/questionImages';
+import { readGrid } from '../../lib/spotGrid';
 import type { LinkEntry } from '../../types/images';
 
 /** Keeps a box at the image's aspect ratio, as large as `maxHeight` and the width allow. */
@@ -40,6 +44,8 @@ export default function QuestionPage() {
     true_false: 'True / False',
     fill_in_the_blank: 'Fill in the Blank',
     multi_select: 'Multi-Select',
+    sort_into_boxes: 'Sort It',
+    find_in_image: 'Spot It',
   };
 
   function editDistanceLabel(d: number): string {
@@ -60,7 +66,12 @@ export default function QuestionPage() {
   const options = currentQuestion.config.options ?? [];
   const optionIds = isChoice ? optionImageIds(currentQuestion.config) : [];
   const imageOptions = optionIds.some(shown);
-  const hasImages = shown(promptId) || imageOptions;
+  // T7: Sort It shows its boxes and cards (in the shared card order); Spot It its image under the
+  // labelled grid, in the gameplay proportions the server stored.
+  const isSort = currentQuestion.type === 'sort_into_boxes';
+  const spotGrid = currentQuestion.type === 'find_in_image' ? readGrid(currentQuestion.config.grid) : null;
+  const spotLink = linkFor(canvasImageId(currentQuestion.config));
+  const hasImages = shown(promptId) || imageOptions || !!spotGrid;
 
   const remainingSeconds = questionLocked && lockedTimerSeconds !== null
     ? lockedTimerSeconds
@@ -108,7 +119,33 @@ export default function QuestionPage() {
         </h2>
       )}
 
-      {hasImages && (
+      {isSort && (
+        <SortItBoard
+          boxes={currentQuestion.config.boxes ?? []}
+          cards={currentQuestion.config.cards ?? []}
+          order={currentQuestion.cardOrder ?? (currentQuestion.config.cards ?? []).map((_, i) => i)}
+        />
+      )}
+
+      {/* Spot It: the canvas stays up when the question locks (only the prompt text hides). */}
+      {spotGrid && (
+        <div className="w-full max-w-[calc(100vw-22rem)]">
+          <SpotItCanvas
+            key={currentQuestion.questionId}
+            mode="question"
+            grid={spotGrid}
+            width={currentQuestion.config.width ?? spotLink?.width ?? 4}
+            height={currentQuestion.config.height ?? spotLink?.height ?? 3}
+            image={{ url: spotLink?.url ?? null, description: spotLink?.description ?? 'the Spot It image' }}
+            refreshImage={refreshImageLinks}
+            maxHeightVh={60}
+            band={32}
+            label={`Spot It grid, ${spotGrid.cols} columns by ${spotGrid.rows} rows, over ${spotLink?.description ?? 'the Spot It image'}`}
+          />
+        </div>
+      )}
+
+      {hasImages && !spotGrid && (
       <div className="flex w-full max-w-[calc(100vw-22rem)] flex-col items-center gap-4">
       {/* The prompt image stays up when the question locks: the room is still discussing it. */}
       {shown(promptId) && (

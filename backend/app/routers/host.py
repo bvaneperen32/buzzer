@@ -137,9 +137,10 @@ async def create_question(
     body: QuestionCreate,
     user: Annotated[User, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis=Depends(get_redis),
 ) -> Question:
     await game_service.assert_host_can_use_game(db, user, game_id)
-    question = await game_management_service.create_question(db, game_id, body)
+    question = await game_management_service.create_question(db, game_id, body, redis)
     await db.commit()
     return question
 
@@ -151,9 +152,12 @@ async def update_question(
     body: QuestionUpdate,
     user: Annotated[User, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis=Depends(get_redis),
 ) -> Question:
     await game_service.assert_host_can_use_game(db, user, game_id)
-    return await game_management_service.update_question(db, game_id, question_id, body)
+    return await game_management_service.update_question(
+        db, game_id, question_id, body, redis
+    )
 
 
 @router.delete("/games/{game_id}/questions/{question_id}", status_code=204)

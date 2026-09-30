@@ -667,12 +667,18 @@ async def live_sessions(
     ]
 
 
-def _live_block_message(action: str, live: Sequence[LiveSessionItem]) -> str:
-    rooms = "; ".join(
+def live_rooms_text(live: Sequence[LiveSessionItem]) -> str:
+    """The live sessions, as every live-guard message lists them. Shared with T7's live
+    freeze (game_management_service), which has its own lead-in."""
+    return "; ".join(
         f"room {s.room_code} ({s.status}, hosted by {s.host_name or 'an unknown host'}, "
         f"created {s.created_at})"
         for s in live
     )
+
+
+def _live_block_message(action: str, live: Sequence[LiveSessionItem]) -> str:
+    rooms = live_rooms_text(live)
     return (
         f"Images can't be {action} while a session of this game is live: {rooms}. "
         "The session's host can rejoin and finish it, or delete it from Play (deleting "
@@ -741,7 +747,16 @@ async def export_inputs(
         Question.time_limit_seconds,
         Question.points_value,
     ).where(Question.game_id == game_id)
-    columns: list[Any] = [Image.id, Image.filename, Image.description, Image.byte_size]
+    # T7: the version and size too, for Spot It's confirmation rule in the bundle builder.
+    columns: list[Any] = [
+        Image.id,
+        Image.filename,
+        Image.description,
+        Image.byte_size,
+        Image.version,
+        Image.width,
+        Image.height,
+    ]
     if with_data:
         columns.append(Image.data)
     # No ORDER BY here either: with `data` selected, a filesort would carry blobs of up to
@@ -755,7 +770,7 @@ async def export_inputs(
         for row in sorted((await db.execute(question_stmt)).all(), key=question_order)
     ]
     images = [
-        ImageRecord(*row[:4], data=row[4] if with_data else None)
+        ImageRecord(*row[:7], data=row[7] if with_data else None)
         for row in sorted((await db.execute(image_stmt)).all(), key=lambda row: row[0])
     ]
     return ExportInputs(
@@ -1006,6 +1021,9 @@ async def add_image(
         filename=filename,
         description=description,
         byte_size=processed.byte_size,
+        version=1,
+        width=processed.width,
+        height=processed.height,
         data=None,
     )
     check_export_change(inputs, images=[*inputs.images, pending])
@@ -1043,10 +1061,18 @@ async def replace_image(
         - image.byte_size
         + processed.byte_size,
     )
+    # T7: the substituted record carries the new version and size too — a replace can drop a
+    # Spot It question's `"confirmed": true` from the export, and that must be measured.
     check_export_change(
         inputs,
         images=[
-            record._replace(byte_size=processed.byte_size, filename=filename)
+            record._replace(
+                byte_size=processed.byte_size,
+                filename=filename,
+                version=record.version + 1,
+                width=processed.width,
+                height=processed.height,
+            )
             if record.id == image_id
             else record
             for record in inputs.images

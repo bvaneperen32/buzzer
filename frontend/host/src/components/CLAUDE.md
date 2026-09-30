@@ -40,7 +40,23 @@ image components (T8).
   server refuses to save it until the author picks another image or none.
 
 Both refuse a file over the 10 MiB input limit before sending it, and both are presentational: the
-page owns the library (`useImageLibrary`) and passes the calls in.
+page owns the library (`useImageLibrary`) and passes the calls in. T7: the panel labels a canvas
+use "Q3 (Spot It)", and Replace on an image a Spot It question uses first warns that the question
+will need review.
+
+`question/` (T7):
+
+- `SpotItCanvas.tsx` — a Spot It grid on a `<canvas>`, in three modes: `question` (the projector's
+  full image with a transparent labelled grid), `results` (the heatmap — heat fills, counts,
+  "Correct" outlines) and `author` (the editor, where a click or Enter toggles a cell). The backing
+  store follows the device pixel ratio and it redraws on resize, a pixel-ratio change and state
+  change only. Image failures follow T8's sequence (refresh the links, retry once, then "Image
+  unavailable — {description}" drawn on the grid with a Retry button); play is never blocked. It
+  exposes `data-grid-cols`, `data-grid-rows` and `data-grid-rect` for automated checks. Also
+  `HeatLegend`.
+- `SortItResults.tsx` — `SortItResults` (the per-card table from `lib/sortResults.ts`, each row
+  carrying its numbers as data attributes) and `SortItBoard` (the projector's boxes and cards
+  during a question).
 
 ## How it fits in
 

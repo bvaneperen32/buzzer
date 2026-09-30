@@ -11,7 +11,14 @@ from pydantic import (
     model_validator,
 )
 
+from ..services import sort_it, spot_it
 from ..services.image_refs import CANVAS_KEY, OPTIONS_KEY, PROMPT_KEY, is_image_id
+
+# The question-type allowlist: the only enforcement of `questions.type` (a plain string column).
+QUESTION_TYPE_PATTERN = (
+    "^(multiple_choice|true_false|fill_in_the_blank|multi_select"
+    f"|{sort_it.TYPE}|{spot_it.TYPE})$"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -129,9 +136,7 @@ class GameResponse(BaseModel):
 
 class QuestionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    type: str = Field(
-        ..., pattern="^(multiple_choice|true_false|fill_in_the_blank|multi_select)$"
-    )
+    type: str = Field(..., pattern=QUESTION_TYPE_PATTERN)
     grading_type: str = Field(..., pattern="^(ACCURACY|COMPLETENESS)$")
     prompt: str = Field(..., min_length=1, max_length=2000)
     config: dict = Field(default_factory=dict)
@@ -196,6 +201,15 @@ class QuestionCreate(BaseModel):
                     )
                 if any(not isinstance(p, (int, float)) for p in pts):
                     raise ValueError("answer_points values must be numbers")
+        # T7: each new type's rules are defined once, in its pure service module.
+        if self.type == sort_it.TYPE:
+            sort_it.validate(
+                self.config, self.answer_data, self.grading_type, self.points_value
+            )
+        if self.type == spot_it.TYPE:
+            spot_it.validate(
+                self.config, self.answer_data, self.grading_type, self.points_value
+            )
         _validate_image_refs(self.type, self.config)
         return self
 
@@ -212,8 +226,20 @@ def _validate_image_refs(question_type: str, config: dict) -> None:
         raise ValueError(
             f"config.{PROMPT_KEY} must be an image id (a positive integer)"
         )
-    # T7 allows it on its canvas type; a legacy null is tolerated everywhere.
-    if config.get(CANVAS_KEY) is not None:
+    if question_type == spot_it.TYPE:
+        # The canvas type (T7): its image is required, and it is the question's only image.
+        if not is_image_id(config.get(CANVAS_KEY)):
+            raise ValueError(
+                f"config.{CANVAS_KEY} is required: choose the Spot It image "
+                "(an image id, a positive integer)"
+            )
+        if prompt_image is not None:
+            raise ValueError(
+                f"Spot It questions show their canvas image, so config.{PROMPT_KEY} "
+                "must be absent or null"
+            )
+    # Refused on every other type; a legacy null is tolerated everywhere.
+    elif config.get(CANVAS_KEY) is not None:
         raise ValueError(
             f"config.{CANVAS_KEY} is only allowed on canvas question types"
         )
@@ -252,9 +278,7 @@ def _validate_image_refs(question_type: str, config: dict) -> None:
 
 class QuestionUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    type: str | None = Field(
-        None, pattern="^(multiple_choice|true_false|fill_in_the_blank|multi_select)$"
-    )
+    type: str | None = Field(None, pattern=QUESTION_TYPE_PATTERN)
     grading_type: str | None = Field(None, pattern="^(ACCURACY|COMPLETENESS)$")
     prompt: str | None = Field(None, min_length=1, max_length=2000)
     config: dict | None = None
@@ -277,6 +301,10 @@ class QuestionResponse(BaseModel):
     points_value: float
     order_index: int
     created_at: datetime
+    # T7 review status, computed by the service (never stored). Spot It only: every other
+    # type is false / [] (docs/plans/t7-question-types.md §2.5).
+    needs_review: bool = False
+    review_reasons: list[str] = Field(default_factory=list)
 
 
 class QuestionReorder(BaseModel):

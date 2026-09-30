@@ -2,7 +2,10 @@ import { useNavigate } from 'react-router-dom';
 import { useGame } from './GameLayout';
 import { Button } from '../../components/ui/button';
 import { SafeImage } from '../../components/ui/SafeImage';
-import { hasCaption, optionImageIds, promptImageId } from '../../lib/questionImages';
+import { SpotItCanvas } from '../../components/question/SpotItCanvas';
+import { SortItResults } from '../../components/question/SortItResults';
+import { canvasImageId, hasCaption, optionImageIds, promptImageId } from '../../lib/questionImages';
+import { readGrid } from '../../lib/spotGrid';
 import type { AnswerReveal, HostQuestionSummaryItem } from '../../types/game';
 import type { LinkEntry } from '../../types/images';
 
@@ -97,7 +100,11 @@ function QuestionCard({ item, index, imageFor, refreshImages }: {
     true_false: 'True / False',
     fill_in_the_blank: 'Fill in the Blank',
     multi_select: 'Multi-Select',
+    sort_into_boxes: 'Sort It',
+    find_in_image: 'Spot It',
   };
+  const spotGrid = type === 'find_in_image' ? readGrid(config.grid) : null;
+  const spotImage = spotGrid ? imageFor(canvasImageId(config)) : null;
 
   const answeredPct = totalPlayers > 0 ? Math.round((totalAnswered / totalPlayers) * 100) : 0;
   const correctPct = totalAnswered > 0 ? Math.round((correctCount / totalAnswered) * 100) : 0;
@@ -214,6 +221,37 @@ function QuestionCard({ item, index, imageFor, refreshImages }: {
           );
         })}
 
+        {type === 'sort_into_boxes' && (
+          <SortItResults
+            boxes={config.boxes ?? []}
+            cards={config.cards ?? []}
+            order={(config.cards ?? []).map((_, i) => i)}
+            distribution={answerDistribution}
+            answered={totalAnswered}
+            correctBoxes={reveal.type === 'sort_into_boxes' ? reveal.correctBoxes : null}
+            variant="summary"
+          />
+        )}
+
+        {spotGrid && (
+          <SpotItCanvas
+            mode="results"
+            grid={spotGrid}
+            width={config.width ?? spotImage?.link?.width ?? 4}
+            height={config.height ?? spotImage?.link?.height ?? 3}
+            image={{
+              url: spotImage?.link?.small_url ?? null,
+              description: spotImage?.link?.description ?? 'the Spot It image',
+            }}
+            refreshImage={refreshImages}
+            maxHeightVh={32}
+            band={22}
+            counts={answerDistribution}
+            accepted={reveal.type === 'find_in_image' ? reveal.acceptedCells : []}
+            label={`Answers on the ${spotGrid.cols} by ${spotGrid.rows} grid`}
+          />
+        )}
+
         {type === 'fill_in_the_blank' && (
           <div className="space-y-2">
             {reveal.type === 'fill_in_the_blank' && (
@@ -240,7 +278,10 @@ function QuestionCard({ item, index, imageFor, refreshImages }: {
       <div className="flex items-center gap-4 pt-1 border-t border-slate-700 text-sm">
         {gradingType === 'ACCURACY' ? (
           <>
-            <span className="text-green-400 font-semibold">{correctCount} correct</span>
+            {/* Sort It's `correct` is a whole board; the per-card numbers are above. */}
+            <span className="text-green-400 font-semibold">
+              {correctCount} {type === 'sort_into_boxes' ? 'all cards correct' : 'correct'}
+            </span>
             <span className="text-slate-600">·</span>
             <span className="text-slate-400">{correctPct}% accuracy</span>
             <span className="text-slate-600">·</span>
