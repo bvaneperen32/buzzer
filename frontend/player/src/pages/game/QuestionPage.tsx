@@ -2,7 +2,10 @@ import { useRef, useState, useCallback } from 'react';
 import { useGame } from './GameLayout';
 import { SafeImage } from '../../components/ui/SafeImage';
 import { TimerBar } from '../../components/ui/TimerBar';
+import { SortBoard } from '../../components/SortBoard';
+import { SpotCanvas } from '../../components/SpotCanvas';
 import { hasCaption, imageOptionName, optionImageLinks } from '../../lib/questionImages';
+import { readGrid } from '../../lib/spotGrid';
 import type { OptionImageLink } from '../../types/game';
 
 const OPTION_COLORS = [
@@ -285,6 +288,59 @@ export default function QuestionPage() {
         {!submitted && questionLocked && lockedMsg}
       </div>
     );
+  }
+
+  // T7. Both boards are keyed by question, so a lock, an unlock or a socket reconnect (whose
+  // late-join `new_question` repeats the same question) never clears what the player has done;
+  // they only toggle `disabled`. Nothing is ever submitted automatically.
+  if (currentQuestion.type === 'sort_into_boxes') {
+    const cards = currentQuestion.config.cards ?? [];
+    return (
+      <div className="py-6 px-4 flex flex-col gap-3">
+        <div className="pb-2">
+          {questionLabel}
+          <TimerBar key={currentQuestion.questionId} totalSeconds={currentQuestion.timeLimitSeconds} paused={questionLocked} />
+        </div>
+        <SortBoard
+          key={currentQuestion.questionId}
+          boxes={currentQuestion.config.boxes ?? []}
+          cards={cards}
+          order={currentQuestion.cardOrder ?? cards.map((_, i) => i)}
+          accuracy={currentQuestion.gradingType !== 'COMPLETENESS'}
+          disabled={submitted || questionLocked}
+          onSubmit={(placements) => submit({ placements })}
+        />
+        {submitted && <p className="text-center text-slate-400 text-sm mt-2">Answer submitted — waiting for results…</p>}
+        {!submitted && questionLocked && lockedMsg}
+      </div>
+    );
+  }
+
+  if (currentQuestion.type === 'find_in_image') {
+    const grid = readGrid(currentQuestion.config.grid);
+    if (grid) {
+      return (
+        <div className="py-6 px-4 flex flex-col gap-3">
+          <div className="pb-2">
+            {questionLabel}
+            <TimerBar key={currentQuestion.questionId} totalSeconds={currentQuestion.timeLimitSeconds} paused={questionLocked} />
+          </div>
+          <p className="text-center text-slate-300 text-sm">
+            Find it on the big screen, then pick the same square here.
+          </p>
+          <SpotCanvas
+            key={currentQuestion.questionId}
+            grid={grid}
+            width={currentQuestion.config.width ?? 4}
+            height={currentQuestion.config.height ?? 3}
+            disabled={submitted || questionLocked}
+            onLockIn={(cell) => submit({ col: cell.col, row: cell.row })}
+          />
+          {submitted && <p className="text-center text-slate-400 text-sm mt-2">Answer submitted — waiting for results…</p>}
+          {!submitted && questionLocked && lockedMsg}
+        </div>
+      );
+    }
   }
 
   return (

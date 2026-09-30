@@ -17,8 +17,10 @@ from ..models.game import Game, Question, UserGameAccess
 from ..models.session import GameSession, SessionScore
 from ..models.user import User
 from ..schemas.game import ScoreResult
+from . import image_service, sort_it, spot_it
 from . import state_service as state
 from .game_lock import fresh, lock_game
+from .image_refs import CANVAS_KEY, is_image_id
 
 logger = structlog.get_logger()
 
@@ -315,6 +317,9 @@ async def create_room(
     # Applies to admins too — so an unassigned game can't run until it's assigned.
     if game.course_id != course_id:
         raise ConflictError("This game belongs to a different course")
+    # T7: every Spot It question must be confirmed against its current image and grid. Read
+    # fresh under the lock, so an image replaced while this waited is seen (T7 spec §2.5).
+    await _assert_spot_it_ready(db, game_id)
 
     # Enforce global room limit — count only LOBBY/IN_PROGRESS rooms.
     # COMPLETED/ABANDONED rooms may linger in Redis briefly for reconnection
@@ -374,6 +379,73 @@ async def create_room(
     return session
 
 
+async def spot_it_review_blockers(
+    db: AsyncSession, game_id: int, questions
+) -> list[str]:
+    """One sentence per Spot It question that needs review, e.g. "Q3 — its image was
+    replaced after the cells were checked.", in question-number order (T7 spec §2.5).
+
+    `questions` are the game's question rows (ORM objects or column rows with `id`,
+    `order_index`, `type`, `config`, `answer_data`); the caller read them fresh under the game
+    lock. Images are read the same way (`get_image_meta(locking=True)`), once each.
+    """
+    infos: dict[int, spot_it.ImageInfo | None] = {}
+    sentences = []
+    ordered = sorted(questions, key=lambda q: (q.order_index, q.id))
+    for number, question in enumerate(ordered, start=1):
+        if question.type != spot_it.TYPE:
+            continue
+        config = question.config if isinstance(question.config, dict) else {}
+        image_id = config.get(CANVAS_KEY)
+        info = None
+        if is_image_id(image_id):
+            if image_id not in infos:
+                meta = await image_service.get_image_meta(
+                    db, game_id, image_id, locking=True
+                )
+                infos[image_id] = (
+                    spot_it.ImageInfo(meta.id, meta.version, meta.width, meta.height)
+                    if meta
+                    else None
+                )
+            info = infos[image_id]
+        reasons = spot_it.review_status(question.config, question.answer_data, info)
+        if reasons:
+            texts = spot_it.reason_texts(reasons, question.config, info)
+            sentences.append(f"Q{number} — {'; '.join(texts)}.")
+    return sentences
+
+
+def spot_it_blocked_message(sentences: list[str]) -> str:
+    return (
+        "These Spot It questions need review before this game can run: "
+        + " ".join(sentences)
+        + " Open the game in the editor, fix each question, check its accepted cells, "
+        "and confirm it."
+    )
+
+
+async def _assert_spot_it_ready(db: AsyncSession, game_id: int) -> None:
+    """The room gate: 409 naming every Spot It question that needs review. Exactly this
+    statement, so the lock tests can recognise its wait (WHERE is the game predicate alone)."""
+    rows = (
+        await db.execute(
+            fresh(
+                select(
+                    Question.id,
+                    Question.order_index,
+                    Question.type,
+                    Question.config,
+                    Question.answer_data,
+                ).where(Question.game_id == game_id)
+            )
+        )
+    ).all()
+    blockers = await spot_it_review_blockers(db, game_id, rows)
+    if blockers:
+        raise ConflictError(spot_it_blocked_message(blockers))
+
+
 async def get_session_by_code(
     db: AsyncSession, redis: Redis, room_code: str
 ) -> tuple[GameSession, dict | None]:
@@ -427,6 +499,11 @@ async def start_game(
         raise ConflictError(
             "This game has no questions — add questions before starting"
         )
+    # T7 backstop (the live freeze makes it unreachable through normal writes): the session
+    # stays LOBBY, because this raises before the status changes.
+    blockers = await spot_it_review_blockers(db, session.game_id, questions)
+    if blockers:
+        raise ConflictError(spot_it_blocked_message(blockers))
 
     session.status = "IN_PROGRESS"
     # Commit immediately so concurrent on_submit_answer handlers in separate DB
@@ -528,7 +605,29 @@ def calculate_score(question: Question, answer_data: dict) -> ScoreResult:
     Calculate points for a player's answer.
     COMPLETENESS: any answer = full points, no answer = 0
     ACCURACY:     points come from answer_data.answer_points per selected option
+
+    T7's types score in their own modules, before the COMPLETENESS shortcut: a malformed
+    answer scores (0, False) in either mode, and nothing here relies on the gateway's check.
     """
+    if question.type == sort_it.TYPE:
+        points, correct = sort_it.score(
+            question.grading_type,
+            question.points_value,
+            question.config,
+            question.answer_data,
+            answer_data,
+        )
+        return ScoreResult(points_awarded=points, is_correct=correct)
+    if question.type == spot_it.TYPE:
+        points, correct = spot_it.score(
+            question.grading_type,
+            question.points_value,
+            question.config,
+            question.answer_data,
+            answer_data,
+        )
+        return ScoreResult(points_awarded=points, is_correct=correct)
+
     if not answer_data:
         return ScoreResult(points_awarded=0, is_correct=False)
 
@@ -654,6 +753,17 @@ async def record_answer(
                     await state.increment_answer_dist(
                         redis, session_id, question.id, str(idx)
                     )
+    elif question.type == sort_it.TYPE:
+        # One key per card, so at most n·(k+1) ≤ 50 keys per question.
+        placements = sort_it.parse_answer(question.config, answer_data)
+        if placements is not None:
+            for key in sort_it.dist_keys(placements):
+                await state.increment_answer_dist(redis, session_id, question.id, key)
+    elif question.type == spot_it.TYPE:
+        # One key per answer: at most cols·rows ≤ 100 keys per question.
+        cell = spot_it.parse_answer(question.config, answer_data)
+        if cell is not None:
+            dist_key = spot_it.dist_key(cell)
     if dist_key is not None:
         await state.increment_answer_dist(redis, session_id, question.id, dist_key)
 
@@ -742,6 +852,10 @@ async def get_player_question_summary(
                 "type": "multi_select",
                 "answerPoints": q_ans.get("answer_points", []),
             }
+        elif q_type == sort_it.TYPE:
+            reveal = sort_it.reveal(grading_type, r.config, q_ans)
+        elif q_type == spot_it.TYPE:
+            reveal = spot_it.reveal(grading_type, r.config, q_ans)
         else:
             reveal = {}
 
@@ -856,6 +970,10 @@ async def get_host_question_summary(
                 "type": "multi_select",
                 "answerPoints": q_ans.get("answer_points", []),
             }
+        elif q_type == sort_it.TYPE:
+            reveal = sort_it.reveal(grading_type, q["config"], q_ans)
+        elif q_type == spot_it.TYPE:
+            reveal = spot_it.reveal(grading_type, q["config"], q_ans)
         else:
             reveal = {}
 
@@ -887,6 +1005,18 @@ async def get_host_question_summary(
                             if isinstance(idx, int):
                                 k = str(idx)
                                 dist[k] = dist.get(k, 0) + 1
+                # T7: the same parse and keys as live play (record_answer); a stored answer
+                # that doesn't fit the current question is skipped.
+                elif q_type == sort_it.TYPE:
+                    placements = sort_it.parse_answer(q["config"], ans)
+                    if placements is not None:
+                        for k in sort_it.dist_keys(placements):
+                            dist[k] = dist.get(k, 0) + 1
+                elif q_type == spot_it.TYPE:
+                    cell = spot_it.parse_answer(q["config"], ans)
+                    if cell is not None:
+                        k = spot_it.dist_key(cell)
+                        dist[k] = dist.get(k, 0) + 1
             if s["is_correct"]:
                 correct_count += 1
             if s["answer_time_ms"] is not None:

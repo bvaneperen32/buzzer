@@ -21,6 +21,11 @@ All question types are handled automatically:
   fill_in_the_blank — random word from --fitb-words; if --game-json supplied,
                       correct answers are drawn from acceptedAnswers and wrong
                       answers from --fitb-words
+  sort_into_boxes   — (T7 Sort It) each card in a random box, about 20% left
+                      out; if --game-json supplied, accurate players place every
+                      card in its correct box
+  find_in_image     — (T7 Spot It) a random grid cell; if --game-json supplied,
+                      accurate players pick an accepted cell
 
 Usage:
     # Basic — 20 players, default profile mix, default FITB word pool
@@ -258,6 +263,34 @@ class SimPlayer:
             k = random.randint(1, n)
             return {"selectedIndices": sorted(random.sample(range(n), k))}
 
+        if q_type == "sort_into_boxes":
+            config = q.get("config", {})
+            n, k = len(config.get("cards", [])), len(config.get("boxes", []))
+            if n == 0 or k < 2:
+                return None
+            key = (jq or {}).get("answer_data", {}).get("correct_boxes")
+            if isinstance(key, list) and len(key) == n and random.random() < p.accuracy:
+                return {"placements": list(key)}
+            # Random boxes with about 20% of cards left out; at least one card is placed,
+            # since an all-empty board is refused.
+            placements = [
+                None if random.random() < 0.2 else random.randrange(k) for _ in range(n)
+            ]
+            if all(box is None for box in placements):
+                placements[random.randrange(n)] = random.randrange(k)
+            return {"placements": placements}
+
+        if q_type == "find_in_image":
+            grid = q.get("config", {}).get("grid", {})
+            cols, rows = grid.get("cols", 0), grid.get("rows", 0)
+            if cols < 1 or rows < 1:
+                return None
+            cells = (jq or {}).get("answer_data", {}).get("accepted_cells")
+            if cells and random.random() < p.accuracy:
+                chosen = random.choice(cells)
+                return {"col": chosen["col"], "row": chosen["row"]}
+            return {"col": random.randrange(cols), "row": random.randrange(rows)}
+
         return None  # unknown type
 
     def _answer_str(self, answer: dict) -> str:
@@ -269,6 +302,11 @@ class SimPlayer:
             return f"options {answer['selectedIndices']}"
         if "selectedValue" in answer:
             return str(answer["selectedValue"])
+        if "placements" in answer:
+            placed = sum(1 for box in answer["placements"] if box is not None)
+            return f"{placed}/{len(answer['placements'])} cards placed"
+        if "col" in answer and "row" in answer:
+            return f"cell {chr(ord('A') + answer['col'])}{answer['row'] + 1}"
         return repr(answer)
 
     # ── per-question handler ──────────────────────────────────────────────────

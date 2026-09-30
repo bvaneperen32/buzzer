@@ -13,3 +13,11 @@ body {
   /* Prevent tap highlight flash on mobile */
   -webkit-tap-highlight-color: transparent;
 }
+
+/* T7 Spot It: the phone canvas's height cap — 55% of the small viewport height (the height with
+   the browser's toolbars showing), falling back to 55vh where svh isn't supported. SpotCanvas
+   measures a hidden probe with this class. */
+.spot-height-cap {
+  height: 55vh;
+  height: 55svh;
+}

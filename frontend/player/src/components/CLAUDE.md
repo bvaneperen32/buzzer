@@ -25,12 +25,33 @@ set retuned for touch — same API, larger targets.
   `QuestionPage` keys each one by its link: a tile that keeps its position across questions
   must not inherit the previous image's failure.
 
+`SortBoard.tsx` and `SpotCanvas.tsx` (T7, beside `ui/`) are the two new answer surfaces:
+
+- `SortBoard` — Sort It: the card pool above the boxes. Drag a card (pointer events with
+  capture, an 8 px threshold, `touch-action: none` on the chips only, the drop target by
+  `elementFromPoint`) or tap a card, then a box; a placed card can move or go back to the pool.
+  Cards and boxes are buttons ("Card Frog, in box Amphibian"), and a polite live region announces
+  moves. Submit asks before leaving cards out. **Taps select on `click`, not `pointerup`:**
+  selecting re-renders (a "Return to pool" button appears) before the browser's click, which
+  would then land on whatever moved under the finger. The click that ends a drag is ignored.
+- `SpotCanvas` — Spot It: the grid, labels and the image's proportions on a `<canvas>`, never
+  the image. It fits the width and `.spot-height-cap` (55% of the small viewport), with 20 px
+  header bands. A tap or drag selects a cell (header taps are ignored); the arrow keys and the
+  always-visible nudge buttons move the selection, so every cell is reachable at any size. Cell
+  labels are drawn only when cells are ≥ 28 px; in landscape, below 24 px, it suggests turning the
+  phone upright. It exposes `data-grid-*` attributes for the browser checks. It keys the grid on
+  its values, because the page passes a new grid object on every render: a lock or unlock
+  re-renders it without redrawing the canvas.
+
+Both take a `disabled` prop that never clears their state.
+
 ## How it fits in
 
-Dumb components: they never read `useGame()`, call `api`, or navigate. Note that the answer
-controls are *not* here — the multiple-choice tiles, True/False buttons, text field, and
-multi-select checklist are all inline in `pages/game/QuestionPage.tsx`, because each is tightly
-coupled to its submit logic.
+Dumb components: they never read `useGame()`, call `api`, or navigate. Note that the original
+four types' answer controls are *not* here — the multiple-choice tiles, True/False buttons, text
+field, and multi-select checklist are all inline in `pages/game/QuestionPage.tsx`, because each is
+tightly coupled to its submit logic. T7's two are components, because each carries real
+interaction state.
 
 ## Gotchas
 

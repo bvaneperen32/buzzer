@@ -266,6 +266,18 @@ No stack needed. They import the backend as `app`, so put `backend/` on the path
 cd tests/unit && PYTHONPATH=../../backend python -m pytest -q
 ```
 
+### Browser checks (Sort It and Spot It)
+
+Playwright scripts that play both question types on a projector page and phone-sized pages, and
+exercise the question editor, through nginx at `:8080` against the production builds (run
+`npm run build` first). Setup, configuration (base URL, admin credentials, browser) and how to
+read the results are in [tests/browser/README.md](tests/browser/README.md):
+
+```bash
+pip install -r tests/browser/requirements.txt
+python tests/browser/bc_editor.py && python tests/browser/bc_sort.py && python tests/browser/bc_spot.py
+```
+
 ### WebSocket smoke test
 
 A quick end-to-end script that creates seed data, plays through a full game, and verifies every event payload (dependencies are included in `backend/requirements.txt`):
@@ -436,6 +448,35 @@ Question order is determined by array position; `order_index` is assigned automa
 
 A game with no images still exports as version 1, byte for byte as before, and every version 1 file still imports. Each image entry has exactly those four fields. An import is checked in full (count, entries, references, every image through the pipeline, the library budget) before anything is created, and its export size is measured on the game as stored before anything is committed, so a refused import leaves nothing behind. Exporting, importing and exporting again gives identical bytes.
 
+**Sort It and Spot It questions** (see below) export like this. A Sort It question needs no image (version 1 unless the game has images); a Spot It question always refers to its image by key, so its game exports as version 2:
+
+```json
+{"type": "sort_into_boxes", "grading_type": "ACCURACY", "prompt": "Sort by class",
+ "config": {"boxes": ["Mammal", "Reptile", "Amphibian"],
+            "cards": ["Whale", "Gecko", "Frog", "Bat", "Newt", "Tortoise"]},
+ "answer_data": {"correct_boxes": [0, 1, 2, 0, 2, 1]},
+ "time_limit_seconds": 45, "points_value": 1000}
+```
+
+```json
+{"type": "find_in_image", "grading_type": "ACCURACY", "prompt": "Find the lighthouse",
+ "config": {"image_id": "img-1", "grid": {"cols": 6, "rows": 4}},
+ "answer_data": {"accepted_cells": [{"col": 4, "row": 1}, {"col": 4, "row": 2}], "confirmed": true},
+ "time_limit_seconds": 30, "points_value": 1000}
+```
+
+- A Spot It bundle never carries the image's `width`/`height`: import rebuilds them from the imported image.
+- `"confirmed": true` is written only when the accepted cells were confirmed against the exported image and grid. An imported question marked confirmed is stamped against its new image. Its grid must fit that image, or the import is refused. An unconfirmed question imports needing review, with its grid and cells unchanged. A bundle can't carry `confirmed_for`, the stamp the server stores internally.
+
+### Sort It and Spot It
+
+Two question types added in T7 (design: `docs/plans/t7-question-types.md`):
+
+- **Sort It** (`sort_into_boxes`): players place 2–4-box, 4–10-card boards on their phones by dragging or tapping a card and then a box, and can leave a card out. ACCURACY scores each card: right +1, wrong −1/(boxes − 1), left out 0. The question is floored at 0, then scaled to the points value. The projector shows the boxes and the cards in a shared shuffled order, then per-card results.
+- **Spot It** (`find_in_image`): the projector shows an image under a labelled grid. Players pick the matching cell on their phones, which show only the grid (never the image). ACCURACY is all or nothing on an accepted cell, and results show a heatmap.
+
+A Spot It question's accepted cells must be **confirmed** against its image and grid (the checkbox in the editor). The grid must also fit the image: every cell at least 28 px on a 360 px-wide phone, so a 16:9 image allows up to 10×6. Replacing an image, or changing the grid, makes the question **need review**: rooms can't be created until it's fixed and reconfirmed. While a session of a game is live, its Sort It and Spot It questions are frozen except for their prompt, time limit and (Sort It) prompt image.
+
 ### Images in questions
 
 Every game has its own **image library**, stored in MySQL. Upload, replace, re-describe and delete images from the **Images** panel at the top of a game's question editor, or pick and upload them straight from a question's image pickers. Any question can show an image below its prompt (on the projector only). Multiple-choice and multi-select options can be images, with or without a caption. Every image needs a description, which is its alt text.
@@ -526,7 +567,9 @@ buzzer/
 │   ├── simulate_players.py       Multi-profile async player simulator
 │   └── seed_demo.py              Seeds a demo course and game
 ├── tests/
-│   └── integration/        Pytest integration test suite
+│   ├── integration/        Pytest integration test suite
+│   ├── unit/               Pytest unit tests (no stack needed)
+│   └── browser/            Playwright browser checks for Sort It and Spot It
 ├── sample_games/           Example game JSON files for import
 ├── sample_rosters/         Example Canvas gradebook CSV files for roster import
 ├── ai_log/                 Claude Code session logs (auto-generated, committed by hook)

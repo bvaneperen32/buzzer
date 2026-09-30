@@ -13,16 +13,26 @@ The export rule measures game metadata before it is assigned, but questions
 after they are written and read back (see `_as_stored`); a refusal raises, and
 the request's transaction rolls back. Import checks the whole bundle before
 creating any row, then measures the game it created the same way.
+
+T7 (docs/plans/t7-question-types.md §2.5, §2.6, §2.9): every Spot It write persists
+the merged config with the image's trusted current dimensions, and a stamp sent
+with it is an attempted confirmation (409 when stale, 422 when the grid doesn't
+fit). While a session of the game is live, a Sort It or Spot It question is
+frozen except for its prompt, time limit and (Sort It) prompt image — compared
+on the stored values after the write, so a refusal rolls back.
 """
 
 from __future__ import annotations
 
+import copy
 import json
+from collections.abc import Sequence
 from typing import Any
 
 import bleach
 import structlog
 from pydantic import ValidationError
+from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,10 +43,11 @@ from ..models.image import Image
 from ..models.session import SessionScore
 from ..models.user import User
 from ..schemas.admin import GameCreate, GameUpdate, QuestionCreate, QuestionUpdate
-from . import bundle_service, game_service, image_service
+from ..schemas.image import LiveSessionItem
+from . import bundle_service, game_service, image_service, sort_it, spot_it
 from .bundle_service import GameMeta, QuestionFields
 from .game_lock import fresh, lock_game
-from .image_refs import OPTIONS_KEY, image_refs, map_image_refs
+from .image_refs import CANVAS_KEY, OPTIONS_KEY, image_refs, is_image_id, map_image_refs
 
 logger = structlog.get_logger()
 
@@ -148,7 +159,29 @@ async def list_questions(db: AsyncSession, game_id: int) -> list[Question]:
     # image_service.question_order). id breaks order_index ties, so the list, question
     # numbers ("Q3") and export agree.
     result = await db.execute(select(Question).where(Question.game_id == game_id))
-    return sorted(result.scalars().all(), key=image_service.question_order)
+    questions = sorted(result.scalars().all(), key=image_service.question_order)
+    # T7: each Spot It question's review status, from a plain read of its image (the list
+    # takes no locks); every other type is false / [].
+    spot = [
+        q for q in questions if q.type == spot_it.TYPE and isinstance(q.config, dict)
+    ]
+    images = await image_service.images_for_refs(
+        db, game_id, [q.config.get(CANVAS_KEY) for q in spot]
+    )
+    for question in questions:
+        reasons: list[str] = []
+        if question.type == spot_it.TYPE:
+            config = question.config if isinstance(question.config, dict) else {}
+            image_id = config.get(CANVAS_KEY)
+            image = images.get(image_id) if is_image_id(image_id) else None
+            info = (
+                spot_it.ImageInfo(image.id, image.version, image.width, image.height)
+                if image is not None
+                else None
+            )
+            reasons = spot_it.review_status(question.config, question.answer_data, info)
+        _attach_review_status(question, reasons)
+    return questions
 
 
 async def _as_stored(db: AsyncSession, question: Question) -> QuestionFields:
@@ -174,17 +207,184 @@ async def _as_stored(db: AsyncSession, question: Question) -> QuestionFields:
     )
 
 
+# ---------------------------------------------------------------------------
+# T7: Spot It confirmation and dimensions, the live freeze, review status
+# ---------------------------------------------------------------------------
+
+T7_TYPES = (sort_it.TYPE, spot_it.TYPE)
+
+_LIVE_FIX = (
+    "To change it now, the session's host can finish the game or delete the session from "
+    "Play (deleting discards its partial scores); admins can delete sessions from Sessions."
+)
+
+
+def _live_message(lead_in: str, live: Sequence[LiveSessionItem]) -> str:
+    """The freeze's 409: a T7 lead-in, T8's room list (T8's own message is unchanged), the
+    fix (T7 spec §2.6)."""
+    return f"{lead_in} Live: {image_service.live_rooms_text(live)}. {_LIVE_FIX}"
+
+
+def _image_info(meta: image_service.ImageMeta | None) -> spot_it.ImageInfo | None:
+    return (
+        spot_it.ImageInfo(meta.id, meta.version, meta.width, meta.height)
+        if meta
+        else None
+    )
+
+
+def _attach_review_status(question: Question, reasons: list[str]) -> Question:
+    """Set the computed (never stored) fields `QuestionResponse` reports."""
+    question.needs_review = bool(reasons)
+    question.review_reasons = list(reasons)
+    return question
+
+
+def _stale_stamp_message(stamp: dict, config: dict, version: int) -> str:
+    checked = (
+        f"image {stamp['image_id']} v{stamp['image_version']}, "
+        f"{stamp['cols']}×{stamp['rows']}"
+    )
+    cols, rows = spot_it.grid(config)
+    image = (
+        ""
+        if stamp["image_id"] == config[CANVAS_KEY]
+        else f"image {config[CANVAS_KEY]} "
+    )
+    return (
+        "The image or grid changed after the accepted cells were checked "
+        f"(checked: {checked}; now: {image}v{version}, {cols}×{rows}). "
+        "Review the cells and save again."
+    )
+
+
+def _too_dense_to_confirm_message(cols: int, rows: int, width: int, height: int) -> str:
+    max_cols, max_rows = spot_it.max_grid(width, height)
+    if max_rows < spot_it.MIN_GRID or max_cols < spot_it.MIN_GRID:
+        text = spot_it.too_dense_text(cols, rows, width, height).removeprefix(
+            "its image"
+        )
+        return (
+            f"Can't confirm: this image{text}. Choose or replace the image, then confirm "
+            "again."
+        )
+    return (
+        f"Can't confirm: the {cols}×{rows} grid is too dense for this image (at most "
+        f"{max_cols}×{max_rows}). Change the grid, re-check the accepted cells, and confirm "
+        "again."
+    )
+
+
+def _spot_it_write(
+    config: dict,
+    answer_data: dict,
+    meta: image_service.ImageMeta,
+    *,
+    answer_data_sent: bool,
+) -> tuple[dict, dict]:
+    """(config, answer_data) to persist for a Spot It write (T7 spec §2.5 "Writes"), on plain
+    values after every locking read.
+
+    - The config always gets the image's trusted current `width`/`height`.
+    - When `answer_data` was sent (always on create), its stamp decides: absent or null → no
+      stamp (a null key is removed, so stored data never holds `confirmed_for: null`); an
+      object → an attempted confirmation, which must match the current image version and grid
+      (else 409) and then fit the image (else 422). Without a sent `answer_data`, the stored
+      one — stamp included — is carried unchanged and never stamp-validated.
+    """
+    written_config = {**config, "width": meta.width, "height": meta.height}
+    if not answer_data_sent:
+        return written_config, answer_data
+    sent_stamp = answer_data.get("confirmed_for")
+    if sent_stamp is None:
+        return written_config, {
+            key: value for key, value in answer_data.items() if key != "confirmed_for"
+        }
+    cols, rows = spot_it.grid(config)  # validate_structure has checked the grid
+    if sent_stamp != spot_it.stamp_for(config[CANVAS_KEY], meta.version, cols, rows):
+        raise ConflictError(_stale_stamp_message(sent_stamp, config, meta.version))
+    if not spot_it.grid_fits(cols, rows, meta.width, meta.height):
+        raise UnprocessableError(
+            _too_dense_to_confirm_message(cols, rows, meta.width, meta.height)
+        )
+    return written_config, answer_data
+
+
+def _frozen_fields(fields: QuestionFields) -> tuple:
+    """What a live session freezes on a Sort It or Spot It question (T7 spec §2.6): its type,
+    grading, points, whole answer key (with the stamp), and answer surface."""
+    config = fields.config if isinstance(fields.config, dict) else {}
+    if fields.type == sort_it.TYPE:
+        surface: tuple = (config.get("boxes"), config.get("cards"))
+    elif fields.type == spot_it.TYPE:
+        surface = (config.get(CANVAS_KEY), config.get("grid"))
+    else:
+        surface = ()
+    return (
+        fields.type,
+        fields.grading_type,
+        fields.points_value,
+        fields.answer_data,
+        surface,
+    )
+
+
+def _question_number(inputs: image_service.ExportInputs, question_id: int) -> int:
+    """The question's 1-based position in the game's order ("Q3")."""
+    for number, (qid, _, _) in enumerate(inputs.questions, start=1):
+        if qid == question_id:
+            return number
+    return len(inputs.questions) + 1
+
+
+async def _spot_it_meta(
+    db: AsyncSession, game_id: int, config: dict
+) -> image_service.ImageMeta:
+    """The canvas image's current metadata, read fresh under the game lock. The library check
+    has already passed, so the image exists."""
+    meta = await image_service.get_image_meta(
+        db, game_id, config[CANVAS_KEY], locking=True
+    )
+    if meta is None:  # unreachable after assert_in_library; a clear error, not a crash
+        raise UnprocessableError(
+            f"Image {config[CANVAS_KEY]} isn't in this game's library"
+        )
+    return meta
+
+
 async def create_question(
-    db: AsyncSession, game_id: int, body: QuestionCreate
+    db: AsyncSession, game_id: int, body: QuestionCreate, redis: Redis
 ) -> Question:
     # The router has already validated the body as QuestionCreate (reference shapes too).
     await lock_game(db, game_id)
     await image_service.assert_in_library(
         db, game_id, [ref.image_id for ref in image_refs(body.config)]
     )
+    # T7 locking reads, all before any assignment (T8's fresh-read rule).
+    meta = live = None
+    if body.type == spot_it.TYPE:
+        meta = await _spot_it_meta(db, game_id, body.config)
+        live = await image_service.live_sessions(db, redis, game_id, locking=True)
     inputs = await image_service.export_inputs(
         db, game_id, with_data=False, locking=True
     )
+
+    config, answer_data = body.config, body.answer_data
+    reasons: list[str] = []
+    if meta is not None:
+        config, answer_data = _spot_it_write(
+            config, answer_data, meta, answer_data_sent=True
+        )
+        reasons = spot_it.review_status(config, answer_data, _image_info(meta))
+        if live and reasons:
+            # A LOBBY session would include it at start, which the gate would then refuse.
+            raise ConflictError(
+                _live_message(
+                    "A Spot It question can't be added unconfirmed while a session of this "
+                    "game is live; check its accepted cells and confirm it first.",
+                    live,
+                )
+            )
 
     # From the same fresh list, so two creates that waited on the lock get distinct indexes.
     if body.order_index is None:
@@ -197,8 +397,8 @@ async def create_question(
         type=body.type,
         grading_type=body.grading_type,
         prompt=sanitize_prompt(body.prompt),
-        config=body.config,
-        answer_data=body.answer_data,
+        config=config,
+        answer_data=answer_data,
         time_limit_seconds=body.time_limit_seconds,
         points_value=body.points_value,
         order_index=order_index,
@@ -209,16 +409,31 @@ async def create_question(
     image_service.check_export_change(
         inputs, questions=[*inputs.fields, await _as_stored(db, question)]
     )
-    return question
+    return _attach_review_status(question, reasons)
 
 
 async def update_question(
-    db: AsyncSession, game_id: int, question_id: int, body: QuestionUpdate
+    db: AsyncSession,
+    game_id: int,
+    question_id: int,
+    body: QuestionUpdate,
+    redis: Redis,
 ) -> Question:
     await lock_game(db, game_id)
     # Fresh (shared, populate_existing): the merge must start from the latest committed
     # question, not the pre-lock snapshot or an unrefreshed object.
     question = await _get_question(db, game_id, question_id, locking=True)
+    # T7: the stored question as plain values, before anything is assigned — the live
+    # freeze compares it with the question as stored after the write.
+    before = QuestionFields(
+        type=question.type,
+        grading_type=question.grading_type,
+        prompt=question.prompt,
+        config=copy.deepcopy(question.config),
+        answer_data=copy.deepcopy(question.answer_data),
+        time_limit_seconds=question.time_limit_seconds,
+        points_value=question.points_value,
+    )
 
     # An explicit null means "leave unchanged", so drop nulls along with unset fields.
     changes = body.model_dump(exclude_unset=True, exclude_none=True)
@@ -235,9 +450,40 @@ async def update_question(
     await image_service.assert_in_library(
         db, game_id, [ref.image_id for ref in image_refs(validated.config)]
     )
+    # T7 locking reads, all before any assignment (T8's fresh-read rule).
+    meta = None
+    if validated.type == spot_it.TYPE:
+        meta = await _spot_it_meta(db, game_id, validated.config)
+    live = []
+    if before.type in T7_TYPES or validated.type in T7_TYPES:
+        live = await image_service.live_sessions(db, redis, game_id, locking=True)
     inputs = await image_service.export_inputs(
         db, game_id, with_data=False, locking=True
     )
+
+    # T7 checks on plain values.
+    number = _question_number(inputs, question_id)
+    # Another type becoming a T7 type; a T7 question's own type change is a frozen-field
+    # change, refused below with the frozen-field lead-in.
+    if live and validated.type in T7_TYPES and before.type not in T7_TYPES:
+        raise ConflictError(
+            _live_message(
+                f"Q{number} can't become a Sort It or Spot It question while a session "
+                "of this game is live.",
+                live,
+            )
+        )
+    if meta is not None:
+        # Every Spot It write persists the merged config with trusted dimensions, even
+        # when the request omitted `config` (T7 spec §2.5 Writes, step 2).
+        changes["config"], answer_data = _spot_it_write(
+            validated.config,
+            validated.answer_data,
+            meta,
+            answer_data_sent="answer_data" in changes,
+        )
+        if "answer_data" in changes:
+            changes["answer_data"] = answer_data
 
     # Every locking read is done, so only now assign (populate_existing would overwrite
     # unflushed changes). Then the export rule on the question as stored; a refusal raises,
@@ -247,6 +493,19 @@ async def update_question(
     for field, value in changes.items():
         setattr(question, field, value)
     stored = await _as_stored(db, question)
+    if (
+        live
+        and before.type in T7_TYPES
+        and _frozen_fields(stored) != _frozen_fields(before)
+    ):
+        raise ConflictError(
+            _live_message(
+                f"Q{number} can't be changed while a session of this game is live; only "
+                "its prompt, time limit and (Sort It) prompt image can change until the "
+                "session ends.",
+                live,
+            )
+        )
     image_service.check_export_change(
         inputs,
         questions=[
@@ -254,7 +513,12 @@ async def update_question(
             for qid, _, fields in inputs.questions
         ],
     )
-    return question
+    reasons = (
+        spot_it.review_status(stored.config, stored.answer_data, _image_info(meta))
+        if meta is not None
+        else []
+    )
+    return _attach_review_status(question, reasons)
 
 
 async def delete_question(db: AsyncSession, game_id: int, question_id: int) -> None:
@@ -316,6 +580,30 @@ async def export_game(db: AsyncSession, game: Game) -> tuple[str, bytes]:
 
 def _describe(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
+
+
+def _take_bundle_confirmation(q: dict, label: str) -> tuple[dict, bool]:
+    """A bundle's Spot It question without its `answer_data.confirmed` flag, and the flag.
+
+    Bundles are version-free, so they record confirmation as a boolean (absent = false); the
+    stamp is rebuilt against the imported image (T7 spec §2.9). A stamp in a bundle is refused.
+    """
+    answer_data = q.get("answer_data")
+    if not isinstance(answer_data, dict):
+        return q, False  # QuestionCreate reports the malformed answer_data
+    if "confirmed_for" in answer_data:
+        raise UnprocessableError(
+            f"{label}: bundles record confirmation as answer_data.confirmed"
+        )
+    if "confirmed" not in answer_data:
+        return q, False
+    confirmed = answer_data["confirmed"]
+    if type(confirmed) is not bool:
+        raise UnprocessableError(
+            f"{label}: answer_data.confirmed must be true or false"
+        )
+    rest = {key: value for key, value in answer_data.items() if key != "confirmed"}
+    return {**q, "answer_data": rest}, confirmed
 
 
 def _has_image_reference(config: dict) -> bool:
@@ -380,10 +668,14 @@ async def import_game(
     if not isinstance(questions_raw, list):
         raise UnprocessableError("'questions' must be a list")
     validated_questions: list[QuestionCreate] = []
+    # T7: which Spot It questions the bundle marks confirmed, by question index.
+    confirmed_in_bundle: dict[int, bool] = {}
     for i, q in enumerate(questions_raw):
         label = f"Question {i + 1}"
         if not isinstance(q, dict):
             raise UnprocessableError(f"{label} invalid: must be an object")
+        if q.get("type") == spot_it.TYPE:
+            q, confirmed_in_bundle[i] = _take_bundle_confirmation(q, label)
         config = q.get("config")
         if isinstance(config, dict):
             entries_value = config.get(OPTIONS_KEY)
@@ -417,6 +709,26 @@ async def import_game(
         entries, image_service.import_deadline()
     )
 
+    # T7, before any write: a Spot It question marked confirmed is an attempted confirmation,
+    # so its grid must fit its (processed) image. Unconfirmed questions keep any structurally
+    # valid grid; nothing is resized or remapped (T7 spec §2.9).
+    for i, q in enumerate(validated_questions):
+        if q.type == spot_it.TYPE and confirmed_in_bundle.get(i):
+            image = processed[q.config[CANVAS_KEY] - 1]
+            cols, rows = spot_it.grid(q.config)
+            if not spot_it.grid_fits(cols, rows, image.width, image.height):
+                max_cols, max_rows = spot_it.max_grid(image.width, image.height)
+                fix = (
+                    "change the image"
+                    if min(max_cols, max_rows) < spot_it.MIN_GRID
+                    else "fix the grid"
+                )
+                raise UnprocessableError(
+                    f"Question {i + 1} is marked confirmed, but "
+                    f"{spot_it.too_dense_text(cols, rows, image.width, image.height)}; "
+                    f'remove "confirmed" or {fix}'
+                )
+
     # 7. The library budget, on the processed sizes (exactly what will be stored).
     image_service.check_budgets(len(processed), sum(p.byte_size for p in processed))
 
@@ -444,14 +756,28 @@ async def import_game(
     real_ids = [image.id for image in images]
 
     for idx, q in enumerate(validated_questions):
+        config = map_image_refs(q.config, lambda value: real_ids[value - 1])
+        answer_data = q.answer_data
+        if q.type == spot_it.TYPE:
+            # Dimensions rebuilt from the processed image (any sent ones are discarded), and
+            # a confirmed question stamped against the new image at version 1.
+            position = q.config[CANVAS_KEY]
+            image = processed[position - 1]
+            config = {**config, "width": image.width, "height": image.height}
+            answer_data = dict(q.answer_data)
+            if confirmed_in_bundle.get(idx):
+                cols, rows = spot_it.grid(config)
+                answer_data["confirmed_for"] = spot_it.stamp_for(
+                    real_ids[position - 1], 1, cols, rows
+                )
         db.add(
             Question(
                 game_id=game.id,
                 type=q.type,
                 grading_type=q.grading_type,
                 prompt=sanitize_prompt(q.prompt),
-                config=map_image_refs(q.config, lambda value: real_ids[value - 1]),
-                answer_data=q.answer_data,
+                config=config,
+                answer_data=answer_data,
                 time_limit_seconds=q.time_limit_seconds,
                 points_value=q.points_value,
                 order_index=idx,

@@ -19,9 +19,14 @@ export function optionImageIds(config: QuestionConfig | undefined): (number | nu
   return options.map((_, i) => asImageId(entries[i]));
 }
 
-/** Every image id the question refers to (prompt and options). */
+/** A Spot It question's canvas image (T7), or null. */
+export function canvasImageId(config: QuestionConfig | undefined): number | null {
+  return asImageId(config?.image_id);
+}
+
+/** Every image id the question refers to (prompt, options and the Spot It canvas). */
 export function referencedImageIds(config: QuestionConfig | undefined): number[] {
-  const ids = [promptImageId(config), ...optionImageIds(config)];
+  const ids = [promptImageId(config), ...optionImageIds(config), canvasImageId(config)];
   return [...new Set(ids.filter((id): id is number => id !== null))];
 }
 

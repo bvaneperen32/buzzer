@@ -29,7 +29,7 @@ from ..database import AsyncSessionLocal
 from ..models.game import Question
 from ..models.session import GameSession
 from ..redis_client import get_redis
-from ..services import game_service, image_service
+from ..services import game_service, image_service, sort_it, spot_it
 from ..services import state_service as state
 from ..services.auth_service import get_user_by_id
 from . import events as E
@@ -123,6 +123,10 @@ async def _question_payload(db, q: Question, number: int, total: int) -> dict:
     }
     if q.type == "fill_in_the_blank":
         payload["editDistance"] = q.answer_data.get("editDistance", 0)
+    if q.type == sort_it.TYPE:
+        # T7: one shared display order for the projector and every phone (non-revealing).
+        dims = sort_it.shape(q.config)
+        payload["cardOrder"] = sort_it.card_order(q.id, dims[0]) if dims else []
     payload["images"] = await image_service.question_player_images(
         db, q, datetime.now(timezone.utc)
     )
@@ -171,7 +175,27 @@ def _answer_reveal(q: Question) -> dict:
             "type": "multi_select",
             "answerPoints": q.answer_data.get("answer_points", []),
         }
+    if q.type == sort_it.TYPE:
+        return sort_it.reveal(q.grading_type, q.config, q.answer_data)
+    if q.type == spot_it.TYPE:
+        return spot_it.reveal(q.grading_type, q.config, q.answer_data)
     return {}
+
+
+# T7 answer shapes, checked before record_answer; a malformed answer is an `error`, no score.
+_T7_ANSWER_ERRORS = {
+    sort_it.TYPE: (
+        'Sort It answers must be {"placements": [...]}: one box number or null per card, '
+        "with at least one card placed"
+    ),
+    spot_it.TYPE: 'Spot It answers must be {"col": …, "row": …}: a cell inside the grid',
+}
+
+
+def _t7_answer_is_valid(question: Question, answer_data: Any) -> bool:
+    if question.type == sort_it.TYPE:
+        return sort_it.parse_answer(question.config, answer_data) is not None
+    return spot_it.parse_answer(question.config, answer_data) is not None
 
 
 async def _emit_error(sid: str, message: str) -> None:
@@ -896,15 +920,28 @@ async def _on_host_advance_impl(sid: str) -> None:
             from sqlalchemy import select as sa_select
             from ..models.session import SessionScore as _Score
 
-            q_score_rows = await db.execute(
-                sa_select(_Score.user_id, _Score.points_awarded).where(
-                    _Score.session_id == session_id,
-                    _Score.question_id == question.id,
+            q_score_rows = (
+                await db.execute(
+                    sa_select(
+                        _Score.user_id,
+                        _Score.points_awarded,
+                        _Score.answer_data,
+                        _Score.is_correct,
+                    ).where(
+                        _Score.session_id == session_id,
+                        _Score.question_id == question.id,
+                    )
                 )
-            )
+            ).all()
             q_scores: dict[str, int] = {
                 r.user_id: r.points_awarded for r in q_score_rows
             }
+            # T7: each player's own validated answer and correctness, so the phone's result
+            # screen is self-contained (T7 spec §2.7).
+            q_answers: dict[str, tuple[Any, bool]] = {
+                r.user_id: (r.answer_data, bool(r.is_correct)) for r in q_score_rows
+            }
+            t7_question = question.type in (sort_it.TYPE, spot_it.TYPE)
 
             # Bar-chart results → host (no player names)
             await sio.emit(
@@ -926,18 +963,27 @@ async def _on_host_advance_impl(sid: str) -> None:
             }
             for player in players:
                 uid = player["user_id"]
-                await sio.emit(
-                    E.QUESTION_RESULTS,
-                    {
-                        "questionId": question.id,
-                        "answerReveal": reveal,
-                        "yourPoints": q_scores.get(uid, 0),
-                        "yourScore": player.get("score", 0),
-                        "yourRank": rank_map.get(uid, len(players)),
-                        "playerCount": len(players),
-                    },
-                    to=_user_room(uid),
-                )
+                personal = {
+                    "questionId": question.id,
+                    "answerReveal": reveal,
+                    "yourPoints": q_scores.get(uid, 0),
+                    "yourScore": player.get("score", 0),
+                    "yourRank": rank_map.get(uid, len(players)),
+                    "playerCount": len(players),
+                }
+                if t7_question:
+                    answer = q_answers.get(uid)
+                    personal.update(
+                        {
+                            "questionType": question.type,
+                            "gradingType": question.grading_type,
+                            "pointsValue": question.points_value,
+                            "answered": answer is not None,
+                            "yourAnswer": answer[0] if answer else None,
+                            "yourIsCorrect": answer[1] if answer else False,
+                        }
+                    )
+                await sio.emit(E.QUESTION_RESULTS, personal, to=_user_room(uid))
 
             room_state["question_phase"] = "RESULTS"
             room_state.pop("question_locked", None)
@@ -1162,6 +1208,12 @@ async def on_submit_answer(sid: str, data: dict) -> None:
         question = await db.get(Question, question_id)
         if not question:
             await _emit_error(sid, "Question not found")
+            return
+
+        if question.type in _T7_ANSWER_ERRORS and not _t7_answer_is_valid(
+            question, answer_data
+        ):
+            await _emit_error(sid, _T7_ANSWER_ERRORS[question.type])
             return
 
         if question.type == "multi_select":

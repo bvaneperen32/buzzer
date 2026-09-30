@@ -8,6 +8,29 @@ export interface QuestionConfig {
   prompt_image_id?: number | null;
   /** Parallel to `options`: an image id per option, or null. */
   option_images?: (number | null)[] | null;
+  /** Sort It (T7): 2–4 box labels and 4–10 card labels, in the author's order. */
+  boxes?: string[];
+  cards?: string[];
+  /** Spot It (T7): the canvas image, its grid, and the server-written gameplay dimensions. */
+  image_id?: number | null;
+  grid?: { cols: number; rows: number };
+  width?: number;
+  height?: number;
+}
+
+/** Every question type the server accepts (the backend's `QUESTION_TYPE_PATTERN`). */
+export type QuestionType =
+  | 'multiple_choice'
+  | 'true_false'
+  | 'fill_in_the_blank'
+  | 'multi_select'
+  | 'sort_into_boxes'
+  | 'find_in_image';
+
+/** A Spot It grid cell: column and row, 0-based from the top-left. */
+export interface GridCell {
+  col: number;
+  row: number;
 }
 
 /** One entry of `new_question`'s `images` map: a small link and the full image's size. */
@@ -48,13 +71,18 @@ export interface QuestionPayload {
   questionId: number;
   questionNumber: number;
   totalQuestions: number;
-  type: 'multiple_choice' | 'true_false' | 'fill_in_the_blank' | 'multi_select';
+  type: QuestionType;
   gradingType: 'ACCURACY' | 'COMPLETENESS';
   prompt: string;
   config: QuestionConfig;
   timeLimitSeconds: number;
   pointsValue: number;
   editDistance?: number;
+  /**
+   * Sort It (T7): the display order of the cards, a permutation of their indices shared by the
+   * projector and every phone. Answers always use the original indices.
+   */
+  cardOrder?: number[];
   startedAt?: string;  // ISO timestamp — only present in sync_state reconnect payloads
   /**
    * Small links for the question's option images, keyed by image id as a string (T8). The
@@ -91,6 +119,8 @@ export type AnswerReveal =
   | { type: 'fill_in_the_blank'; acceptedAnswers: string[]; editDistance: number }
   | { type: 'completeness' }
   | { type: 'multi_select'; answerPoints: number[] }
+  | { type: 'sort_into_boxes'; correctBoxes: number[] }
+  | { type: 'find_in_image'; acceptedCells: GridCell[] }
   | Record<string, never>;
 
 export interface HostResultsPayload {
@@ -105,7 +135,7 @@ export interface HostQuestionSummaryItem {
   questionId: number;
   questionNumber: number;
   prompt: string;
-  type: 'multiple_choice' | 'true_false' | 'fill_in_the_blank' | 'multi_select';
+  type: QuestionType;
   gradingType: 'ACCURACY' | 'COMPLETENESS';
   config: QuestionConfig;
   pointsValue: number;

@@ -45,12 +45,22 @@ def question(config: dict, prompt: str = "Which one?") -> QuestionFields:
     )
 
 
-def image(image_id: int, size: int = 5) -> ImageRecord:
+def image(
+    image_id: int,
+    size: int = 5,
+    *,
+    version: int = 1,
+    width: int = 1600,
+    height: int = 900,
+) -> ImageRecord:
     return ImageRecord(
         id=image_id,
         filename=f"pic{image_id}.png",
         description=f"Picture {image_id}",
         byte_size=size,
+        version=version,
+        width=width,
+        height=height,
         data=bytes(n % 256 for n in range(size)),
     )
 
@@ -404,6 +414,145 @@ class TestExportRepairs:
         assert bs.bundle_size(META, questions, images) == len(
             export(META, questions, images)
         )
+
+
+# ---------------------------------------------------------------------------
+# T7: Spot It in bundles — one portable representation (T7 spec §2.9)
+# ---------------------------------------------------------------------------
+
+SPOT_CELLS = [{"col": 4, "row": 1}, {"col": 1, "row": 0}]  # stored out of row-major order
+
+
+def spot_question(
+    answer_data: dict | None = None,
+    *,
+    cols: int = 6,
+    rows: int = 6,
+    image_id: int = 1,
+    width: object = 1600,
+    height: object = 900,
+    grading: str = "ACCURACY",
+) -> QuestionFields:
+    return QuestionFields(
+        type="find_in_image",
+        grading_type=grading,
+        prompt="Find the lighthouse",
+        config={
+            "image_id": image_id,
+            "grid": {"cols": cols, "rows": rows},
+            "width": width,
+            "height": height,
+        },
+        answer_data={"accepted_cells": SPOT_CELLS} if answer_data is None else answer_data,
+        time_limit_seconds=30,
+        points_value=1000.0,
+    )
+
+
+def stamped(version: int = 1, cols: int = 6, rows: int = 6, image_id: int = 1) -> dict:
+    return {
+        "accepted_cells": SPOT_CELLS,
+        "confirmed_for": {
+            "image_id": image_id,
+            "image_version": version,
+            "cols": cols,
+            "rows": rows,
+        },
+    }
+
+
+def exported_question(questions, images, index: int = 0) -> dict:
+    return json.loads(export(META, questions, images))["questions"][index]
+
+
+class TestSpotItBundles:
+    def test_confirmed_question_exports_the_flag_and_no_dimensions(self):
+        exported = exported_question([spot_question(stamped())], [image(1)])
+        assert exported["config"] == {"image_id": "img-1", "grid": {"cols": 6, "rows": 6}}
+        assert exported["answer_data"] == {"accepted_cells": SPOT_CELLS, "confirmed": True}
+
+    @pytest.mark.parametrize(
+        ("question_", "images", "confirmed"),
+        [
+            (spot_question(stamped()), [image(1)], True),
+            (spot_question(), [image(1)], False),  # not_confirmed
+            (spot_question(stamped()), [image(1, version=2)], False),  # image_replaced
+            (spot_question(stamped(image_id=2)), [image(1), image(2)], False),  # image_changed
+            (spot_question(stamped(cols=5)), [image(1)], False),  # grid_changed
+            (  # grid_too_dense: a 10×6 grid confirmed on landscape, image now portrait
+                spot_question(stamped(version=2, cols=10, rows=6), cols=10, rows=6),
+                [image(1, version=2, width=900, height=1600)],
+                False,
+            ),
+            (spot_question(stamped(image_id=9), image_id=9), [image(1)], False),  # missing
+            (  # replaced before reconfirmation: stored dimensions still the old image's
+                spot_question(stamped(cols=10, rows=6), cols=10, rows=6),
+                [image(1, version=2, width=900, height=1600)],
+                False,
+            ),
+            (  # COMPLETENESS without cells, confirmed
+                spot_question({"confirmed_for": stamped()["confirmed_for"]}, grading="COMPLETENESS"),
+                [image(1)],
+                True,
+            ),
+            (spot_question(stamped(), width="junk", height=None), [image(1)], True),
+        ],
+    )  # fmt: skip
+    def test_every_review_status_is_measured_exactly(self, question_, images, confirmed):
+        questions = [question(({"options": ["a", "b"]})), question_]
+        assert bs.bundle_size(META, questions, images) == len(
+            export(META, questions, images)
+        )
+        exported = exported_question(questions, images, index=1)
+        assert ("confirmed" in exported["answer_data"]) is confirmed
+        assert "width" not in exported["config"] and "height" not in exported["config"]
+        assert "confirmed_for" not in exported["answer_data"]
+
+    def test_pending_upload_record_is_measured_exactly(self):
+        # add_image measures the library plus a pending record (version 1, processed size).
+        questions = [spot_question(stamped())]
+        pending = image(2, size=11, version=1, width=900, height=1600)
+        assert bs.bundle_size(
+            META, questions, [image(1), pending._replace(data=None)]
+        ) == len(export(META, questions, [image(1), pending]))
+
+    def test_substituted_replacement_record_drops_confirmed(self):
+        # replace_image measures the library with the replaced record substituted: version
+        # + 1 and the processed size. The stamp names version 1, so "confirmed" drops.
+        questions = [spot_question(stamped())]
+        before = [image(1, size=9)]
+        after = [image(1, size=9, version=2, width=900, height=1600)]
+        assert bs.bundle_size(META, questions, after) == len(export(META, questions, after))
+        assert "confirmed" not in exported_question(questions, after)["answer_data"]
+        c = bs.bundle_size(META, questions, before) - bs.bundle_size(META, questions, after)
+        assert c == len(',\n        "confirmed": true')
+        # Without the version increase the question would still measure as confirmed —
+        # what T7's pinned replacement boundary test (§4.5, T2) detects.
+        assert bs.bundle_size(META, questions, [before[0]._replace(width=900, height=1600)]) == (
+            bs.bundle_size(META, questions, before)
+        )
+
+    def test_round_trip_representation_is_stable(self):
+        # What an import rebuilds (dimensions from the image, a version-1 stamp when
+        # confirmed) exports to the same bytes.
+        questions = [spot_question(stamped(), width="x", height="y")]
+        rebuilt = [spot_question(stamped())]
+        assert export(META, questions, [image(1)]) == export(META, rebuilt, [image(1)])
+
+    def test_sort_it_is_not_transformed(self):
+        sort_q = QuestionFields(
+            type="sort_into_boxes",
+            grading_type="ACCURACY",
+            prompt="Sort",
+            config={"boxes": ["A", "B"], "cards": ["w", "x", "y", "z"]},
+            answer_data={"correct_boxes": [0, 1, 0, 1]},
+            time_limit_seconds=30,
+            points_value=708.333,
+        )
+        exported = exported_question([sort_q], [])
+        assert exported["config"] == sort_q.config
+        assert exported["answer_data"] == sort_q.answer_data
+        assert json.loads(export(META, [sort_q], []))["version"] == 1
 
 
 # ---------------------------------------------------------------------------

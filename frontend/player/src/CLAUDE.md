@@ -15,19 +15,24 @@ controller, not a display — it can submit answers but never advances the game.
   (`lobby`, `question`, `feedback`, `results`, `gameover`). Unmatched paths go to `/join`.
   **There is no route guard** — `GameLayout` handles auth itself.
 - `index.css` — Tailwind directives, the dark slate background, and
-  `-webkit-tap-highlight-color: transparent` to kill the mobile tap flash.
+  `-webkit-tap-highlight-color: transparent` to kill the mobile tap flash. T7 adds
+  `.spot-height-cap` (`55vh`, then `55svh` where supported), the probe `SpotCanvas` measures for
+  its height cap.
 - `types/game.ts` — socket payload types: `SyncStatePayload`, `QuestionPayload`,
   `AnswerResultPayload`, `PlayerResultsPayload`, `PlayerGameOverPayload`, the
   `PlayerAnswerReveal` union, and `PlayerPhase`, plus `QuestionConfig` (T8's `prompt_image_id` /
   `option_images`) and `QuestionPayload.images` (small links for option images). Hand-maintained.
+  T7 adds the `QuestionType` union, `GridCell`, `SortAnswer`, the T7 config fields, `cardOrder`,
+  the two reveal variants, and the six optional T7 fields of `PlayerResultsPayload`.
 
 **Subdirectories** — each has its own `CLAUDE.md`:
 
 - [`pages/`](pages/CLAUDE.md) — join/identity flow and the five in-game screens, plus
   `GameLayout`.
 - [`components/`](components/CLAUDE.md) — touch-tuned `Button`, `Card`, `Input`, `TimerBar`,
-  `SafeImage`.
-- [`lib/`](lib/CLAUDE.md) — REST client, `cn`, `isTokenExpired`, and `questionImages` (T8).
+  `SafeImage`, and T7's answer surfaces, `SortBoard` and `SpotCanvas`.
+- [`lib/`](lib/CLAUDE.md) — REST client, `cn`, `isTokenExpired`, `questionImages` (T8), and T7's
+  `spotGrid`, `formatPoints`, `canvasColors` and `t7Results`.
 
 ## Architecture
 
@@ -56,9 +61,10 @@ Redis record. Client→server payloads are snake_case** (`room_code` / `role`; `
 
 ### Correctness is computed client-side, and disagrees with the server
 
-`ResultsPage` and `GameOverPage` both decide correctness as `points > 0`, while the server uses
-`points >= pointsValue`. Any partial-credit answer shows the player a green "Correct!" that the
-database records as incorrect. This is the most user-visible defect in the app — and the fix for
+`ResultsPage` and `GameOverPage` both decide correctness as `points > 0` for the original four
+types, while the server uses `points >= pointsValue`. (T7's two types don't: their screens read
+the server's `yourIsCorrect`, or the answer and reveal, from the payload.) Any partial-credit
+answer shows the player a green "Correct!" that the database records as incorrect. This is the most user-visible defect in the app — and the fix for
 `ResultsPage` is local: the server's authoritative `isCorrect` arrives on `answer_received` and
 is already stored in `GameContext` as `answerResult`; `ResultsPage` just doesn't read it. (It's
 absent after a refresh, and the game-over summary has no per-question `isCorrect` at all, so

@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { useGame } from './GameLayout';
 import { Button } from '../../components/ui/button';
 import { choiceLabel } from '../../lib/questionImages';
+import { T7_TYPES, TONE_CLASS, t7GameOverLine } from '../../lib/t7Results';
 import type { PlayerAnswerReveal, QuestionSummaryItem } from '../../types/game';
 
 function describePlayerAnswer(
@@ -60,7 +61,22 @@ function describeCorrectAnswer(
   return '';
 }
 
+/** Sort It and Spot It: one line per question, from the summary item's answer and reveal. */
+function T7QuestionRow({ item, index }: { item: QuestionSummaryItem; index: number }) {
+  const { text, tone } = t7GameOverLine(item);
+  return (
+    <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/50">
+      <p className="text-slate-400 text-xs uppercase tracking-wider mb-1">Q{index + 1}</p>
+      <p className="text-slate-100 text-sm font-medium leading-snug mb-2">{item.prompt}</p>
+      <p className={`text-sm font-semibold ${TONE_CLASS[tone]}`} data-t7-line={item.type}>
+        {text}
+      </p>
+    </div>
+  );
+}
+
 function QuestionRow({ item, index }: { item: QuestionSummaryItem; index: number }) {
+  if (T7_TYPES.includes(item.type)) return <T7QuestionRow item={item} index={index} />;
   const options = item.config.options;
   const isCompleteness = item.answerReveal.type === 'completeness';
   const noAnswer = !item.playerAnswer;

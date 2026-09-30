@@ -1,15 +1,18 @@
 # T7 — Two New Question Types: Sort It and Spot It
 
 **Destination:** `docs/plans/t7-question-types.md`
-**Status:** **Ready for implementation** (2026-09-29). The comprehension, criticism and
-implementation-readiness reviews are complete, every required correction from them is applied, and
-no required issue remains.
+**Status:** **Implemented and verified (2026-09-29).** The automated checks, the browser checks
+and the physical-phone checklist (user-reported) passed, with the final review's cleanup applied.
+Host-disconnect verification is blocked by the pre-existing bug B2, which is deferred with B1
+(§11). The
+comprehension, criticism and implementation-readiness reviews are complete and every required
+correction from them is applied. §11 records the implementation, its verification results and the
+findings that still need attention.
 - The pre-T8 Elephant draft is preserved in commit `a3a0f50`; §7 lists what changed from it. §8,
   §9 and §10 record how each review's findings were resolved.
 - This branch has T8 merged (merge `07c0bf8`, T8 tip `7fbd2b2`, implementation `990fed5`), so the
   T8 code and `docs/plans/t8-image-support.md` are the baseline.
-- Implementation begins at §4.9 step 0 when it is authorized. If implementation reveals a flaw,
-  revise this document first, then the code.
+- If a later change reveals a flaw, revise this document first, then the code.
 
 **Read first:** `docs/plans/t8-image-support.md` (especially §2.6 locks and fresh reads, §2.7
 references, §2.13 live guard, §2.15 bundles, §2.16 the T7 contract), `backend/app/CLAUDE.md`
@@ -279,13 +282,13 @@ whatever their stored order; COMPLETENESS `{type: "completeness"}`.
 Identical on projector, phone, editor, results and report.
 
 **Grid geometry and density (both cell width and height matter).** One pure function,
-`spot_it.max_grid(width, height)`, with a copy in each app's `lib/spotGrid.ts` (a deliberate copy,
+`spot_it.max_grid(width, height)`, with a copy in the host app's `lib/spotGrid.ts` (a deliberate copy,
 like T8's `SafeImage`), defines the limits from a **reference phone**: a 360×640 CSS px portrait
 viewport → canvas box 328×352 (16 px gutters; 55% of the height), minus 20 px header bands (column
 letters on top, row numbers on the left) → grid box 308×332. The image's grid area is the
 largest rectangle of its aspect ratio inside that box, and every cell must be at least 28 px in
 both directions. Because 308 / 28 = 11 and 332 / 28 = 83 / 7, this is computed **in integers
-only** (identical in Python and both TypeScript copies; `width`, `height` are the image's pixel
+only** (identical in Python and the host's TypeScript copy; `width`, `height` are the image's pixel
 dimensions):
 
 ```
@@ -952,7 +955,9 @@ No migration: new fields live in `config`/`answer_data`; `questions.type` is a p
 - `types/game.ts`: unions; `PlayerAnswerReveal` variants `{type: 'sort_into_boxes'; correctBoxes:
   number[]}` and `{type: 'find_in_image'; acceptedCells: {col: number; row: number}[]}`;
   `cardOrder`; the six T7 results fields (optional in the type, since other types omit them).
-- `lib/spotGrid.ts` (copy), `lib/formatPoints.ts` (the §2.2 display rule), new
+- `lib/spotGrid.ts` (a partial copy of the host's: labels, readers, canvas layout and
+  hit-testing; no limits, since the phone draws the grid it's sent — §11 I6),
+  `lib/formatPoints.ts` (the §2.2 display rule), new
   `components/SortBoard.tsx`, `components/SpotCanvas.tsx` (with the nudge-button row;
   presentational; answer via callback; a `disabled` prop that never clears state).
 - `pages/game/QuestionPage.tsx` branches (lock and unlock only toggle `disabled`); `ResultsPage.tsx`
@@ -1107,9 +1112,9 @@ harness and padding-question headroom helper):
     |---|---|
     | `lock_game` (T8's, unchanged) | `FROM games\s+WHERE games\.id = {G}\s+FOR UPDATE` |
     | the replace's `_locked_image` | `FROM images\s+WHERE images\.id = {I} AND images\.game_id = {G}\s+FOR UPDATE` |
-    | the gate's `get_image_meta(locking=True)` | `FROM images\s+WHERE images\.id = {I} AND images\.game_id = {G}\s+LOCK IN SHARE MODE` |
-    | the update's `_get_question(locking=True)` | `FROM questions\s+WHERE questions\.id = {Q} AND questions\.game_id = {G}\s+LOCK IN SHARE MODE` |
-    | the gate's question read | `FROM questions\s+WHERE questions\.game_id = {G}\s+LOCK IN SHARE MODE` |
+    | the gate's `get_image_meta(locking=True)` | `FROM images\s+WHERE images\.id = {I} AND images\.game_id = {G}\s+FOR SHARE` |
+    | the update's `_get_question(locking=True)` | `FROM questions\s+WHERE questions\.id = {Q} AND questions\.game_id = {G}\s+FOR SHARE` |
+    | the gate's question read | `FROM questions\s+WHERE questions\.game_id = {G}\s+FOR SHARE` |
 
     - The gate's question read is specified as exactly
       `fresh(select(Question.id, Question.order_index, Question.type, Question.config,
@@ -1118,7 +1123,10 @@ harness and padding-question headroom helper):
       is still blocked on `lock_game` (which the test also waits for), so only `create_room` can be
       the matching connection.
     - When implementing, confirm each pattern once against the live PROCESSLIST text. A pattern
-      that matches nothing makes `wait_for` fail with the hint; it is never loosened.
+      that matches nothing makes `wait_for` fail with the hint; it is never loosened. (Confirmed
+      during implementation: SQLAlchemy renders a shared locking read as `FOR SHARE` on MySQL 8,
+      not `LOCK IN SHARE MODE` as first written here; the three shared-lock patterns above were
+      corrected to the rendered clause, with the same table, row and lock-clause anchors — §11.)
   - **Setup:** a confirmed ACCURACY Spot It question, 10×6 grid, on a 1600×900 image.
   - **Replace first — proves the room gate's fresh image read:**
     1. `lock_row("images", I)`;
@@ -1329,7 +1337,8 @@ host's `sortResults.ts` port, the editor's text-rule approximations), host
 
 - CI checks, run locally: `ruff check backend/ scripts/`, `ruff format --check backend/ scripts/`,
   and `tsc --noEmit` in all three apps.
-- `cd tests/unit && pytest -v`; `cd tests/integration && pytest -v` with the stack up. The lock
+- `cd tests/unit && PYTHONPATH=../../backend python -m pytest -v` (the unit tests import the
+  backend as `app`); `cd tests/integration && python -m pytest -v` with the stack up. The lock
   tests must run, not skip; T8's suites stay green; existing tests are not deleted or weakened.
 - `python scripts/simulate_players.py --room <CODE> --game-json <exported T7 bundle>` for both types.
 - The §4.6 browser checks and the §4.7 physical-phone checklist, with results recorded in this
@@ -1521,3 +1530,147 @@ only — no malformed-data recovery redesign)
 | O2 | `review_status`/`export_fields` must not raise on malformed stored data | Adopted narrowly: they never raise; such data reports `not_confirmed` and exports without `confirmed`; no repair or migration (§2.5) |
 | O3 | "not re-validated" overstated case 1 | Adopted: "not stamp-validated; still structurally validated" (§2.5) |
 | O4 | Card order on the projector's Sort It results | Adopted: `cardOrder` on ResultsPage; the author's order at game over and in the report (§2.3, §2.8) |
+
+## 11. Implementation and verification record (2026-09-29)
+
+Implemented on `feature/dexter-t7-question-types` following §4.9. The changes are uncommitted,
+for final review.
+
+**Clarifications made during implementation** (no product decision changed):
+
+| # | What | Why |
+|---|---|---|
+| I1 | §4.5's shared-lock wait patterns end in `FOR SHARE`, not `LOCK IN SHARE MODE` | Confirmed against the live PROCESSLIST as §4.5 requires: SQLAlchemy renders a shared locking read that way on MySQL 8. Anchors unchanged |
+| I2 | A live type change *between* T7 types (Sort It → Spot It) gets the frozen-field lead-in, not "can't become" | §2.6 freezes a T7 question's `type` "to anything"; "can't become" is for another type turning into a T7 type |
+| I3 | The phone's Sort It rule states the actual cost for its k ("Wrong: −½ card"); the COMPLETENESS left-out prompt says "1 card is left out. Submit anyway?" (no "score 0") | Concrete for the player; COMPLETENESS doesn't score cards |
+| I4 | Sort It card taps select on `click`, not `pointerup` | Found by the browser checks: selecting on `pointerup` re-rendered (the "Return to pool" button appeared) before the browser's click, which then landed on the box under the finger and undid the selection |
+| I5 | The editor adopts a save's response instead of reloading after an update | O1 (§9): updates commit after responding, so a reload could show the old badge |
+| I6 | Only the host's `lib/spotGrid.ts` copies the grid limits; the player's holds just the labels, readers and canvas layout. §2.4 and §4.3 now say so | The phone draws the grid it's sent and needs no limits. §2.4's "a copy in each app" had been repeated in the context files and code comments (final review, item 3) |
+| I7 | §4.10's unit-test command sets `PYTHONPATH=../../backend` | The unit tests import the backend as `app`; without it every module fails at import (final review, item 7) |
+
+**Defects found by the new tests and fixed:** the Sort It duplicate-label message said "Boxs"
+(unit tests); the tap/layout-shift bug in I4 (browser checks).
+
+**Final review cleanup (2026-09-29).**
+1. **Re-selecting the current Spot It image unticked the confirmation.** Nothing had changed, yet
+   in a live lobby the prompt-only save that followed sent `confirmed_for: null` and got the live
+   freeze's 409. Choosing the image that is already selected is now a no-op. A newer library
+   version of the image still unticks the box, whether it arrives before or while the form is
+   open. Browser regression (`bc_editor.py`, live lobby):
+   - re-select the current image → the box stays ticked, and the grid and cells are unchanged;
+   - a prompt-only save → 200, still confirmed, and only the prompt differs.
+
+   With the fix removed, the regression fails with that 409. Further checks: a replace while the
+   form is open unticks the box, and re-selecting a replaced image doesn't tick it.
+2. **The browser checks are kept in `tests/browser/`**, with a README, `requirements.txt` and
+   configuration from the environment: no credentials in the files, no temporary paths. The
+   editor script's stored-data assertions read the save's response instead of sleeping.
+3. **The grid-copy documentation is corrected** (I6).
+4. **Grading-mode answer keys: no change.** §2.3 already specifies the behaviour; the review item
+   needed no fix.
+5. **The phone's Spot It canvas redrew on every lock and unlock**, because the page passes a new
+   grid object each render. It now keys the grid on its values. A browser check counts canvas
+   clears across a lock and unlock; with the fix removed it fails (10 → 12 draws).
+6. **Reconnect checks** for both types: a phone places cards or selects a cell, loses its socket
+   (dropped without a reload), and reconnects. Its state survives the repeated `new_question`,
+   and the answer it then submits is scored.
+7. **The documented unit-test command is corrected** (I7).
+
+**Verification results**
+
+| Check | Result |
+|---|---|
+| `ruff check backend/ scripts/`, `ruff format --check backend/ scripts/` | clean |
+| `tsc --noEmit` in host, player, admin; `npm run build` | clean; built (rerun after the cleanup) |
+| `ruff check tests/browser` | clean |
+| Unit (`cd tests/unit && PYTHONPATH=../../backend python -m pytest`) | 603 passed (baseline 245); rerun after the cleanup |
+| Integration (`tests/integration`, `-rs`) | 100 passed, 8 skipped — all opt-in: `--fast` ×2, `--image-load` ×2, `--nginx-url` ×4. Every lock test ran (T8's and T7's four forced orderings). Not rerun after the cleanup, which changed no backend code |
+| Opt-in integration runs | `--nginx-url http://localhost:8080`: 4 passed; `--fast` game flow: 9 passed (including the Sort It scenario); `--image-load` not run |
+| Browser checks (§4.6; `tests/browser/`; Playwright + Chrome, `locale: 'en-US'`, nginx `:8080`, production builds) | After the cleanup: editor 100/100, Sort It 44/44, Spot It 50/50, plus 3 known issues reproduced as expected (XFAIL: B1 ×2, B2). Sort It and Spot It pass the same way through the LAN address |
+| Dry run of the checklist game over the LAN address (a one-off script, not kept) | 19/19: the room opens; the projector's QR origin and join hint show the LAN address; a guest joins through the QR link; all seven questions play to game over on a 360×640 phone, which never requests an image |
+| `scripts/simulate_players.py --game-json <exported T7 bundle>` | 12 players over Sort It and Spot It in both modes: answers scored, correct reveals, bounded distributions, no errors |
+| Physical phone (§4.7) | **Passed (user-reported)**, except the host-disconnect part of item 6, which is blocked by B2 — see below |
+
+**Pre-existing problems found during verification** (outside T7; *noted, not scheduled*):
+
+- **B1 — both `GameLayout`s re-create their socket on every route change.**
+  - Their socket effect depends on `navigate`, which React Router 6.30 rebuilds whenever the
+    pathname changes.
+  - An answer emitted in the few tens of milliseconds before the new socket has re-joined is
+    dropped silently (socket.io flushes it before `join_room`). The phone shows "Answer submitted"
+    until results say "No answer".
+  - Fix: read `navigate` through a ref.
+  - The browser checks don't cover it with a delay. After each navigation they wait for the new
+    socket's `sync_state`, and `bc_spot.py` reports B1 as a known issue (XFAIL: 8 sockets per page
+    in one game).
+  - Recorded in both apps' `pages/CLAUDE.md`.
+- **B2 — a host disconnect during a started game does nothing.**
+  - `disconnect` handles a host only while the *Redis* room status is `IN_PROGRESS`, and Redis
+    stays `LOBBY` for the whole game. `_on_host_advance_impl` keeps the room state it read before
+    `start_game` wrote `IN_PROGRESS`, and writes it back when it opens the first question.
+  - Verified: MySQL `IN_PROGRESS`, Redis `LOBBY`. After the projector's browser closed
+    mid-question, the phone got no lock and no "Host disconnected" banner, and no abandon timer
+    started.
+  - `bc_spot.py` reports it as a known issue (XFAIL). Recorded in the backend's
+    `websocket/CLAUDE.md` and the player's `pages/CLAUDE.md`.
+- **B1 and B2 are linked; neither is fixed in T7.**
+  - B2 currently hides B1's churn on the host side. Fixed alone, B2 would turn every host screen
+    change into a "disconnect": a lock, the banner for the rest of the question, then an unlock.
+  - Nothing orders the old socket's `disconnect` before the new socket's `join_room`, so a
+    question could sometimes be left locked with the abandon timer running.
+  - Fix B1 first, or both together.
+- T8's `test_question_update_measured_as_stored_json` failed once in the baseline run and passed
+  on re-run and in the final run: it reads the meter right after a PUT whose commit lands after the
+  response.
+
+**Physical-phone checklist (§4.7) — passed (user-reported, 2026-09-29).** The user ran it on a
+phone through the laptop's LAN address, with the test game below, and reported it as passed as a
+whole rather than item by item. The device model, OS, browser version and locale weren't recorded
+(not required). The host-disconnect part of item 6 couldn't be verified: it is blocked by B2.
+
+| # | Item | Result |
+|---|---|---|
+| 1 | Join by QR | passed |
+| 2 | Sort It: finger drag without the page scrolling; tap-tap; move a placed card; return to pool; 10 cards + 4 boxes fit the width; a left-out card asks before submitting | passed |
+| 3 | Spot It, landscape and portrait images: corner and edge taps select the intended cell; drag moves the selection; nudge buttons; Lock in; no pinch zoom; rotate mid-question (canvas resizes, selection kept); background the browser and return | passed |
+| 4 | The phone never shows the Spot It image (question, results, game over) | passed |
+| 5 | Results text: selected cell, correct/incorrect, correct cells, points; "No answer" when skipped; correct after reloading between answering and results | passed |
+| 6 | Host lock / disconnect disables inputs; unlock re-enables them with placements and selection kept; time running out with a selected but unlocked cell submits nothing | Host Lock / Unlock and the time-out: passed. **Host disconnect: blocked by B2** — until B2 is fixed, a host disconnect neither disables the phone's inputs nor shows the banner. Verify it after the fix |
+| 7 | The projector heatmap is readable from the back of the room | passed |
+| O7 | The canvas height cap (`55svh`, falling back to `55vh`) against the visible height behind the browser's toolbars | passed |
+
+**Device run setup (2026-09-29).**
+- **LAN setup (§4.7).** The host ran at `http://<LAN address>:8080/host/`, with a temporary
+  `CORS_ORIGINS` entry for that origin.
+  - Before the entry, the socket handshake from the LAN origin was refused (400). With it, the
+    handshake was accepted, and other origins were still refused.
+  - After the run the entry was removed, keeping the four original origins, and only the backend
+    was recreated. Localhost was checked afterwards: health, the three apps and the socket
+    handshake all work, and the LAN origin is refused again.
+- **Test game.** "T7 phone checklist", in the course "T7 phone checklist (Physical phone)", is
+  created by `tests/browser/phone_checklist_setup.py`, which also prints each question's answer.
+  It stays in the development database for re-runs:
+
+  | Q | Question | Checklist items |
+  |---|---|---|
+  | 1 | Sort It, 10 cards / 4 boxes ("Sort the animals by class"), 120 s | 2; 6 (host Lock / Unlock) |
+  | 2 | Spot It, landscape 8×5 ("Find the red boat": F4), 90 s | 3, 4 |
+  | 3 | Spot It, portrait 5×8 ("Find the yellow star": B3), 90 s | 3 (rotate, background), 4 |
+  | 4 | Sort It worth 5.1 points ("Land or sea?"), 60 s | 5 (one card wrong → 2.6 of 5.1, in the phone locale's format) |
+  | 5 | Sort It COMPLETENESS, no key ("Would you eat it?"), 60 s | 2 (leave a card out) |
+  | 6 | Spot It COMPLETENESS, no key ("Where would you swim?"), 60 s | 5 (skip it: "No answer") |
+  | 7 | Spot It, landscape 8×5 ("Find the lighthouse": H2 or H3), 20 s | 6 (select, don't lock in, let time run out) |
+
+  Item 1 is the QR join. Item 7 (the heatmap from the back of the room) needs several answers:
+  run `python scripts/simulate_players.py --room <CODE>` on the laptop alongside the phone.
+- **A typed address fails without the trailing slash** (`/player` → 404, and the bare address
+  redirects to port 80), as T8 recorded. Use the QR code.
+
+**Deferred, outside T7** (*noted, not scheduled*):
+- **B1 and B2** (above). Host-disconnect verification waits for the B2 fix: phone item 6 and
+  `bc_spot.py`'s known-issue check.
+- **Test-fixture cleanup.** The browser checks leave their courses and guest accounts behind,
+  because there is no course delete endpoint; `tests/browser/README.md` says so.
+- **Documentation outside T7.** The course template's root `CLAUDE.md` still lists a bare
+  `pytest`, and the finished T4 and T8 specs keep their old unit-test commands.
+- T8's commit-after-response test flake (above), and the typed nginx addresses (T8 §5).

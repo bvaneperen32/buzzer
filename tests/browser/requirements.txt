@@ -1,0 +1,5 @@
+# Browser checks (tests/browser/README.md). They reuse the integration suite's helpers
+# (integration.conftest, integration.engine.socket_client), so they need its dependencies too.
+-r ../integration/requirements.txt
+# route_web_socket (used to drop a phone's socket without a reload) needs 1.48+; verified on 1.63.
+playwright>=1.48
