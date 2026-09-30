@@ -64,7 +64,17 @@ there are none). It builds `new_question`, the late-join push and the host's `sy
 question alike. Prompt images never go to phones; the projector gets its links over REST
 (`GET /api/game/sessions/{id}/images`), not the socket. When `game_service.start_game` returns
 `None`, a concurrent Start (a double click) already started the game while this advance waited
-on the game lock; the handler returns without emitting anything.
+on the game lock; the handler returns without emitting anything. If it raises (T7's backstop: a
+Spot It question needing review), the host gets an `error` and the session stays LOBBY.
+
+**T7.** `_question_payload` adds `cardOrder` to Sort It questions (a permutation seeded by the
+question id, shared by the projector and every phone; never the author's order). Spot It's
+`config.image_id` is only an id — `images` stays `{}` for it, so phones never receive the image.
+`on_submit_answer` checks both T7 answer shapes exactly (after the phase, lock and idempotency
+checks, before `record_answer`); a malformed one is an `error` with no score. Each player's
+`QUESTION_RESULTS` for a T7 question adds `questionType`, `gradingType`, `pointsValue`,
+`answered`, `yourAnswer` and `yourIsCorrect`, so the phone renders its result from that payload
+alone; other types' results are unchanged.
 
 `_answer_reveal` is *mostly* a derived view of `answer_data` — but for `multi_select` it forwards
 the raw `answer_points` array, and for fill-in-the-blank the raw `acceptedAnswers`. Separately,
@@ -92,10 +102,11 @@ question. The invariant that actually holds is "nothing answer-revealing before
   `is_connected = False`; the player stays in the Redis `players` set, and `get_player_count` is a
   `SCARD` of that set. Once anyone drops mid-question without answering, the "everyone answered"
   early-finish can never fire and the host must wait out the timer.
-- **`answer_data` is not validated except for `multi_select`.** The handler checks
-  `selectedIndices` bounds and types, but `multiple_choice`, `true_false`, and
-  `fill_in_the_blank` accept whatever dict the client sends. It's persisted to a JSON column, and
-  fill-in-the-blank text additionally becomes a **Redis hash field key** with no length cap.
+- **`answer_data` is not validated except for `multi_select` and T7's two types.** The handler
+  checks `selectedIndices` bounds and types, and the exact Sort It / Spot It shapes (T7), but
+  `multiple_choice`, `true_false`, and `fill_in_the_blank` accept whatever dict the client
+  sends. It's persisted to a JSON column, and fill-in-the-blank text additionally becomes a
+  **Redis hash field key** with no length cap.
 - **Rate limiting covers connections only, not events.** 10 connects per IP per 10s at
   `connect`; `SUBMIT_ANSWER`, `HOST_ADVANCE`, and `HOST_LOCK_QUESTION` have no throttle beyond
   the phase/idempotency checks.
@@ -173,7 +184,23 @@ question. The invariant that actually holds is "nothing answer-revealing before
 
 ### Host disconnect and reconnect
 
-- When the host's socket drops during an `IN_PROGRESS` game, `disconnect` emits
+- **B2 (pre-existing; T7 spec §11; noted, not scheduled): none of the disconnect handling below
+  runs for a started game.** The branch is gated on the *Redis* room status being `IN_PROGRESS`,
+  and Redis stays `LOBBY`: `_on_host_advance_impl` reads `room_state` (status `LOBBY`) before
+  calling `game_service.start_game`, which writes `IN_PROGRESS` to Redis, and then writes its own
+  stale copy back (with the first question's index and phase) before broadcasting the question.
+  MySQL says `IN_PROGRESS`; Redis says `LOBBY` for the rest of the game. Verified during T7: after
+  the projector's browser closed mid-question, the phones received no `QUESTION_LOCKED` or
+  `HOST_DISCONNECTED`, nothing was logged, and no abandon timer started. The timer keeps running
+  and auto-locks at zero as usual.
+  - **It is linked to B1** (both apps' `GameLayout` re-create their socket on every route change;
+    see the host's [pages/CLAUDE.md](../../../frontend/host/src/pages/CLAUDE.md)). Fixing B2 alone
+    would treat every host screen change as a disconnect: a lock, the "Host disconnected" banner
+    (which stays up for the whole question) and an unlock at every question. And nothing orders
+    the old socket's `disconnect` before the new socket's `join_room`, so a rejoin processed first
+    would leave the question locked and the 5-minute abandon task running with the host
+    connected. Fix B1 first, or both together.
+- As designed, when the host's socket drops during an `IN_PROGRESS` game, `disconnect` emits
   `HOST_DISCONNECTED` (with `abandonAt`) to the room and starts the 5-minute abandon task. If a
   question is open and unlocked, it is also **auto-locked**: the timer is cancelled, the remaining
   time is saved in `timer_remaining_seconds`, and `question_locked_by_disconnect` is set.

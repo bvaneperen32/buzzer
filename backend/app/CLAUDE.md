@@ -73,22 +73,28 @@ vanished `room:{code}` key ends a live game (see "Redis lifecycle").
 `services/auth_service.py`, so `common` is not a leaf. Services must never import
 `common.dependencies`.
 
-**T8's module dependencies** (each arrow means "imports"; nothing may import against them):
+**T8's and T7's module dependencies** (each arrow means "imports"; nothing may import against
+them):
 
 ```
 image_refs              → (nothing)            schemas.admin also imports it, for the keys
+sort_it                 → (nothing)            T7: Sort It's pure rules
+spot_it                 → image_refs           T7: Spot It's pure rules
+schemas.admin           → image_refs, sort_it, spot_it
 game_lock               → models, common.exceptions
-bundle_service          → image_refs, common.exceptions
+bundle_service          → image_refs, spot_it, common.exceptions
 image_service           → image_refs, bundle_service, game_lock, auth_service, state_service,
                           models, schemas.image, common.exceptions
-game_management_service → image_refs, bundle_service, image_service, game_lock, game_service
-game_service            → game_lock        (T7 will add image_service)
-report_service          → image_service, image_refs
-websocket/gateway       → image_service
+game_management_service → image_refs, bundle_service, image_service, game_lock, game_service,
+                          sort_it, spot_it
+game_service            → game_lock, image_service, sort_it, spot_it
+report_service          → image_service, image_refs, sort_it, spot_it
+websocket/gateway       → image_service, sort_it, spot_it
 ```
 
 `image_service` and `bundle_service` never import `game_service` or `game_management_service`,
-which keeps T7's future `game_service → image_service` import cycle-free.
+which keeps `game_service → image_service` (T7's room gates) cycle-free, and `sort_it` /
+`spot_it` import nothing else from the application.
 
 ## Cross-cutting invariants
 
@@ -143,6 +149,16 @@ which keeps T7's future `game_service → image_service` import cycle-free.
   (`game_management_service._as_stored`): MySQL's `FLOAT` and JSON columns can store a number
   longer than it was sent. Only strings and integers (metadata, image fields) are exact before
   they're written.
+- **A Spot It question plays only when confirmed** (T7, `docs/plans/t7-question-types.md`
+  §2.5): its `answer_data.confirmed_for` stamp must name the current image version and grid, and
+  the grid must fit the image (`spot_it.max_grid`). One pure rule, `spot_it.review_status`, decides
+  it everywhere — write responses, the question list, the export's `"confirmed": true`, and the
+  room gates in `create_room` and `start_game`, which read the questions and images fresh under
+  the game lock. Every Spot It write stores the image's trusted `width`/`height` in `config`.
+- **Sort It and Spot It questions are frozen while a session of their game is live** (T7 §2.6):
+  only the prompt, time limit and (Sort It) prompt image may change, compared as stored after the
+  write so a refusal rolls back; a type change *to* a T7 type and an unconfirmed Spot It create are
+  refused too. Existing types keep today's unguarded mid-session edits.
 - **No image changes version while a session of its game is live** (LOBBY or IN_PROGRESS *and*
   its Redis room exists). Replace and delete are refused, and `create_room` takes the game lock
   and commits before responding. Links carry the version and are cached `immutable`, so this is
@@ -161,25 +177,29 @@ a plain string, and every client has a silent fallback for an unknown type.
 
 **Backend**
 
-- `schemas/admin.py` — the type regex in `QuestionCreate` *and* `QuestionUpdate`, plus a branch
-  in `QuestionCreate.validate_structure`. **Image references** (T8): its `_validate_image_refs`
-  allows `prompt_image_id` on every type and `option_images` only on `multiple_choice` /
-  `multi_select`, and refuses `image_id` everywhere. A canvas type (T7) must be allowed, and
-  required, to carry `image_id` there. A type whose options can be images must be added to
+- `schemas/admin.py` — `QUESTION_TYPE_PATTERN` (shared by `QuestionCreate` and
+  `QuestionUpdate`), plus a branch in `QuestionCreate.validate_structure`; T7's types delegate to
+  a pure module per type (`services/sort_it.py`, `services/spot_it.py`), which is the pattern to
+  follow. **Image references** (T8): `_validate_image_refs` allows `prompt_image_id` on every type
+  but Spot It, `option_images` only on `multiple_choice` / `multi_select`, and `image_id` only on
+  `find_in_image`, where it's required. A type whose options can be images must be added to
   `_IMAGE_OPTION_TYPES` *and* rendered by both apps' option-image code.
 - `services/game_service.py` — `calculate_score`, `record_answer`'s distribution key,
   `get_player_question_summary`'s reveal, and `get_host_question_summary` (twice: its reveal *and*
   its distribution rebuild).
 - `websocket/gateway.py` — `_answer_reveal`; `_question_payload` if the client needs extra
-  non-revealing fields (as fill-in-the-blank needs `editDistance`); and `on_submit_answer` if the
-  answer shape needs validating (only `multi_select` has a check today).
+  non-revealing fields (as fill-in-the-blank needs `editDistance`, and Sort It `cardOrder`); and
+  `on_submit_answer` if the answer shape needs validating (`multi_select` and both T7 types have
+  checks). T7 also added per-player `question_results` fields for its types only.
 - `services/report_service.py` — `_answer_reveal`, `_extract_answer_key`, the type-badge map (and
-  its CSS class), and the chart dispatch in `build_session_report`.
+  its CSS class), and the chart dispatch in `build_session_report` (T7's types render through
+  their own pure renderers, `_render_sort_table` and `_render_spot_svg`, escaping every author
+  string).
 
 **Frontend** (see [frontend/CLAUDE.md](../../frontend/CLAUDE.md))
 
-- host — `types/game.ts` (the type unions and `AnswerReveal`), `QuestionPage`'s type label,
-  `ResultsPage.buildBars` and the word-cloud branch, and `GameOverPage`'s `QuestionCard`.
+- host — `types/game.ts` (the `QuestionType` union and `AnswerReveal`), `QuestionPage`'s type
+  label, `ResultsPage.buildBars` and the word-cloud branch, and `GameOverPage`'s `QuestionCard`.
 - player — `types/game.ts`, a `QuestionPage` branch (the answer controls),
   `ResultsPage.describeAnswer`, and `GameOverPage`'s `describePlayerAnswer` /
   `describeCorrectAnswer`.
@@ -294,8 +314,9 @@ alembic upgrade head                      # required before first run; bootstrap
 ruff check . && ruff format .
 docker compose exec backend <command>
 
-# tests are NOT under backend/ — they live at the repo root (see ../CLAUDE.md)
-cd tests/unit && pytest -v
+# tests are NOT under backend/ — they live at the repo root (see ../CLAUDE.md); the unit tests
+# import this package as `app`, so backend/ must be on the path
+cd tests/unit && PYTHONPATH=../../backend python -m pytest -v
 ```
 
 Startup blocks (logging every 5s) until the schema exists rather than crashing — under

@@ -8,6 +8,36 @@ export interface QuestionConfig {
   prompt_image_id?: number | null;
   /** Parallel to `options`: an image id per option, or null. */
   option_images?: (number | null)[] | null;
+  /** Sort It (T7): 2–4 box labels and 4–10 card labels, in the author's order. */
+  boxes?: string[];
+  cards?: string[];
+  /**
+   * Spot It (T7): the grid and the image's proportions. `image_id` is only an id — phones never
+   * receive or show the Spot It image.
+   */
+  image_id?: number | null;
+  grid?: { cols: number; rows: number };
+  width?: number;
+  height?: number;
+}
+
+export type QuestionType =
+  | 'multiple_choice'
+  | 'true_false'
+  | 'fill_in_the_blank'
+  | 'multi_select'
+  | 'sort_into_boxes'
+  | 'find_in_image';
+
+/** A Spot It grid cell: column and row, 0-based from the top-left. */
+export interface GridCell {
+  col: number;
+  row: number;
+}
+
+/** A Sort It answer: one entry per card (original order), a box index or null (left out). */
+export interface SortAnswer {
+  placements: (number | null)[];
 }
 
 /** One entry of `new_question`'s `images` map: a small link and the full image's size. */
@@ -32,11 +62,14 @@ export interface QuestionPayload {
   questionId: number;
   questionNumber: number;
   totalQuestions: number;
-  type: 'multiple_choice' | 'true_false' | 'fill_in_the_blank' | 'multi_select';
+  type: QuestionType;
+  gradingType?: 'ACCURACY' | 'COMPLETENESS';
   prompt: string;
   config: QuestionConfig;
   timeLimitSeconds: number;
   pointsValue: number;
+  /** Sort It (T7): the card display order shared with the projector. */
+  cardOrder?: number[];
   /**
    * Small links for the question's option images only, keyed by image id as a string (T8).
    * Phones never receive prompt images.
@@ -57,7 +90,9 @@ export type PlayerAnswerReveal =
   | { type: 'true_false'; correctValue: boolean }
   | { type: 'fill_in_the_blank'; acceptedAnswers: string[]; editDistance: number }
   | { type: 'completeness' }
-  | { type: 'multi_select'; answerPoints: number[] };
+  | { type: 'multi_select'; answerPoints: number[] }
+  | { type: 'sort_into_boxes'; correctBoxes: number[] }
+  | { type: 'find_in_image'; acceptedCells: GridCell[] };
 
 export interface PlayerResultsPayload {
   questionId: number;
@@ -66,18 +101,38 @@ export interface PlayerResultsPayload {
   yourScore: number;
   yourRank: number;
   playerCount: number;
+  // T7 questions only (spec §2.7): enough to render the result from this payload alone, even
+  // after a reload between answering and results.
+  questionType?: QuestionType;
+  gradingType?: 'ACCURACY' | 'COMPLETENESS';
+  /** The question's maximum points. */
+  pointsValue?: number;
+  answered?: boolean;
+  /** This player's validated answer, or null when they didn't answer. */
+  yourAnswer?: SortAnswer | GridCell | null;
+  yourIsCorrect?: boolean;
 }
 
 export interface QuestionSummaryItem {
   questionId: number;
   prompt: string;
-  type: 'multiple_choice' | 'true_false' | 'fill_in_the_blank' | 'multi_select';
+  type: QuestionType;
   gradingType: 'ACCURACY' | 'COMPLETENESS';
   config: QuestionConfig;
   pointsAwarded: number;
   maxPoints: number;
   answerTimeMs: number | null;
-  playerAnswer: { selectedIndex?: number; selectedValue?: boolean; text?: string; selectedIndices?: number[] } | null;
+  playerAnswer:
+    | {
+        selectedIndex?: number;
+        selectedValue?: boolean;
+        text?: string;
+        selectedIndices?: number[];
+        placements?: (number | null)[];
+        col?: number;
+        row?: number;
+      }
+    | null;
   answerReveal: PlayerAnswerReveal;
 }
 

@@ -7,8 +7,12 @@ in, so the exporter, the meters and every write's export check measure exactly t
   configs hold no image keys (the export repairs below drop explicit nulls too).
 - Otherwise it exports as version 2, with the whole library and questions referring to images
   by key (`img-1`, `img-2`, … in id order).
+- T7: a Spot It question exports its portable form (`spot_it.export_fields`): no server-owned
+  `width`/`height`, and `"confirmed": true` instead of the stamp, only when it is confirmed
+  against the exported image. Measurement goes through the same builder, so the bytes measured
+  are always the bytes exported.
 
-Imports only image_refs and common.exceptions (T8 spec §4.4).
+Imports only image_refs, spot_it and common.exceptions (T8 spec §4.4; T7 spec §4.1).
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from collections.abc import Sequence
 from typing import Any, NamedTuple
 
 from ..common.exceptions import ConflictError
+from . import spot_it
 from .image_refs import CANVAS_KEY, OPTIONS_KEY, PROMPT_KEY, is_image_id, map_image_refs
 
 MIB = 1024 * 1024
@@ -57,6 +62,11 @@ class ImageRecord(NamedTuple):
     filename: str
     description: str
     byte_size: int
+    # T7: the image's current version and size, for Spot It's "confirmed" (the shared
+    # review rule). Required, so a constructor that forgets them fails loudly.
+    version: int
+    width: int
+    height: int
     data: bytes | None  # the full image; None when only measuring
 
 
@@ -126,9 +136,21 @@ def build_bundle(
     """
     ordered = sorted(images, key=lambda image: image.id)
     keys = {image.id: image_key(n) for n, image in enumerate(ordered, start=1)}
+    infos = {
+        image.id: spot_it.ImageInfo(image.id, image.version, image.width, image.height)
+        for image in ordered
+    }
 
     def key_for(value: Any) -> str | None:
         return keys.get(value) if is_image_id(value) else None
+
+    def portable(q: QuestionFields) -> tuple[Any, Any]:
+        """(config, answer_data) as exported, before references are mapped to keys."""
+        if q.type != spot_it.TYPE or not isinstance(q.config, dict):
+            return q.config, q.answer_data
+        image_id = q.config.get(CANVAS_KEY)
+        info = infos.get(image_id) if is_image_id(image_id) else None
+        return spot_it.export_fields(q.config, q.answer_data, info)
 
     bundle: dict[str, Any] = {
         "format": BUNDLE_FORMAT,
@@ -149,18 +171,21 @@ def build_bundle(
             }
             for image in ordered
         ]
-    bundle["questions"] = [
-        {
-            "type": q.type,
-            "grading_type": q.grading_type,
-            "prompt": q.prompt,
-            "config": _export_config(q.config, key_for),
-            "answer_data": q.answer_data,
-            "time_limit_seconds": q.time_limit_seconds,
-            "points_value": q.points_value,
-        }
-        for q in questions
-    ]
+    exported = []
+    for q in questions:
+        config, answer_data = portable(q)
+        exported.append(
+            {
+                "type": q.type,
+                "grading_type": q.grading_type,
+                "prompt": q.prompt,
+                "config": _export_config(config, key_for),
+                "answer_data": answer_data,
+                "time_limit_seconds": q.time_limit_seconds,
+                "points_value": q.points_value,
+            }
+        )
+    bundle["questions"] = exported
     return bundle
 
 

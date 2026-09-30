@@ -40,6 +40,18 @@ class-name merger. There is no socket helper here — the socket lives directly 
   about 2 h fast computes 0 every time and refetches in a tight loop.
 - `questionImages.ts` — reads image ids out of a question's `config` defensively (only a positive
   integer counts), option letters, "has a caption", and the image options' accessible names.
+  T7: `canvasImageId` (a Spot It question's image), which `referencedImageIds` now includes, so
+  `GameLayout` refreshes the link map for a canvas image it lacks.
+- `spotGrid.ts` (T7) — Spot It's grid geometry in the backend's integer arithmetic (`maxGrid`,
+  `defaultGrid`, `gridFits`), canvas layout and hit-testing, cell labels, the heat ramp's steps and
+  legend, and the "Needs review" texts for the server's reason codes. The limits are a deliberate
+  copy of the backend's `spot_it` module, the authority. The player app's `spotGrid.ts` repeats
+  only the labels, readers and canvas layout (no limits).
+- `sortResults.ts` (T7) — the one TypeScript port of `sort_it.results_breakdown`, used by both
+  `ResultsPage` and `GameOverPage`: integer half-up percentages (never `Math.round`), the most
+  common wrong box (ties to the lowest index), "—" with no answers.
+- `canvasColors.ts` (T7) — the Spot It canvases' colours (the viridis heat ramp at 55%, grid lines,
+  Correct outlines), in one place for T9's theming.
 - `format.ts` — byte counts and limits in KiB/MiB for the image UI.
 
 ## How it fits in

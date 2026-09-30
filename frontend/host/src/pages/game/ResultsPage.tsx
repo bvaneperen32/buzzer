@@ -2,13 +2,17 @@ import { useEffect, useState } from 'react';
 import { useGame } from './GameLayout';
 import { Button } from '../../components/ui/button';
 import { SafeImage } from '../../components/ui/SafeImage';
+import { HeatLegend, SpotItCanvas } from '../../components/question/SpotItCanvas';
+import { SortItResults } from '../../components/question/SortItResults';
 import {
+  canvasImageId,
   hasCaption,
   imageOptionName,
   optionImageIds,
   optionLetter as optionLabel,
   promptImageId,
 } from '../../lib/questionImages';
+import { readGrid } from '../../lib/spotGrid';
 import type { AnswerReveal } from '../../types/game';
 import type { LinkEntry } from '../../types/images';
 
@@ -300,6 +304,9 @@ export default function ResultsPage() {
   }, [autoAdvance, questionResults, emitAdvance]);
 
   const isFitb = currentQuestion?.type === 'fill_in_the_blank';
+  const isSort = currentQuestion?.type === 'sort_into_boxes';
+  const spotGrid =
+    currentQuestion?.type === 'find_in_image' ? readGrid(currentQuestion.config.grid) : null;
 
   // Images resolve through the session link map (an id it doesn't have is no image, unless the
   // map couldn't be fetched at all).
@@ -314,7 +321,7 @@ export default function ResultsPage() {
   const prompt = imageFor(promptImageId(currentQuestion?.config));
 
   const bars =
-    !isFitb && questionResults
+    !isFitb && !isSort && !spotGrid && questionResults
       ? buildBars(
           questionResults.answerReveal,
           questionResults.answerDistribution,
@@ -323,7 +330,9 @@ export default function ResultsPage() {
         )
       : [];
 
-  const hasImages = !!prompt || bars.some(b => b.image);
+  const hasImages = !!prompt || bars.some(b => b.image) || !!spotGrid;
+  const reveal = questionResults?.answerReveal;
+  const spotLink = imageLinks[String(canvasImageId(currentQuestion?.config))];
 
   return (
     // With images on screen, the bottom band stays clear for the fixed QR / room-code panel.
@@ -351,7 +360,50 @@ export default function ResultsPage() {
         />
       )}
 
-      {questionResults && isFitb ? (
+      {/* T7: shown only on entering RESULTS (Show Results, or the host's auto-advance). */}
+      {questionResults && isSort && currentQuestion && (
+        <div className="w-full max-w-4xl space-y-2">
+          <SortItResults
+            boxes={currentQuestion.config.boxes ?? []}
+            cards={currentQuestion.config.cards ?? []}
+            order={currentQuestion.cardOrder ?? (currentQuestion.config.cards ?? []).map((_, i) => i)}
+            distribution={questionResults.answerDistribution}
+            answered={questionResults.totalAnswered}
+            correctBoxes={reveal?.type === 'sort_into_boxes' ? reveal.correctBoxes : null}
+            variant="results"
+          />
+          <p className="text-slate-500 text-sm text-right">
+            {questionResults.totalAnswered} / {questionResults.totalPlayers} answered
+          </p>
+        </div>
+      )}
+
+      {questionResults && spotGrid && currentQuestion && (
+        <div className="flex w-full max-w-[calc(100vw-22rem)] flex-col items-center gap-3">
+          <SpotItCanvas
+            key={currentQuestion.questionId}
+            mode="results"
+            grid={spotGrid}
+            width={currentQuestion.config.width ?? spotLink?.width ?? 4}
+            height={currentQuestion.config.height ?? spotLink?.height ?? 3}
+            image={{ url: spotLink?.url ?? null, description: spotLink?.description ?? 'the Spot It image' }}
+            refreshImage={refreshImageLinks}
+            maxHeightVh={55}
+            band={32}
+            counts={questionResults.answerDistribution}
+            accepted={reveal?.type === 'find_in_image' ? reveal.acceptedCells : []}
+            label={`Answers on the ${spotGrid.cols} by ${spotGrid.rows} grid`}
+          />
+          <HeatLegend
+            counts={questionResults.answerDistribution}
+            answered={questionResults.totalAnswered}
+            total={questionResults.totalPlayers}
+            showCorrect={reveal?.type === 'find_in_image'}
+          />
+        </div>
+      )}
+
+      {questionResults && (isSort || spotGrid) ? null : questionResults && isFitb ? (
         <WordCloud
           distribution={questionResults.answerDistribution}
           answerReveal={questionResults.answerReveal}

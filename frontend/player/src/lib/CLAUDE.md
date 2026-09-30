@@ -20,6 +20,17 @@ JWT expiry check.
   or `null` per option, from the question's `images` map; an unknown id is no image), the option
   letters, `choiceLabel` (`A — Paris`, or the letter alone), and image options' accessible names.
   A deliberate copy of the host's helpers; the apps share no code.
+- `spotGrid.ts` (T7) — Spot It's grid geometry on the phone: canvas layout, the cell under a
+  point, labels, and readers for the received grid and cell. It copies only those parts of the
+  host's `lib/spotGrid.ts` (keep them in step). It has no grid limits: the phone draws whatever
+  grid the server sent; the limits live in the backend's `spot_it` and the host's copy.
+- `formatPoints.ts` (T7) — the points display rule for T7 results:
+  `Intl.NumberFormat(undefined, {maximumFractionDigits: 1})`, so at most one decimal, half away
+  from zero, in the viewer's locale ("687.5", "708.3", "1,000"). It agrees with the report's
+  `format_points` because both round the shortest decimal representation (0.15 → "0.2").
+- `canvasColors.ts` (T7) — the phone canvas's colours, in one place for T9's theming.
+- `t7Results.ts` (T7) — the Sort It and Spot It results and game-over texts, built only from the
+  server's payload (answer, reveal, points).
 
 ## How it fits in
 

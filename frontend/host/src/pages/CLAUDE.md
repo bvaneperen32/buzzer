@@ -42,6 +42,17 @@ and presentation.
   prompt (every type) and one per multiple-choice and multi-select option row; the list shows a
   prompt thumbnail and each choice option as letter, thumbnail, caption. After any question
   change the library reloads, because uses, question numbers and the export meter follow it.
+  T7 adds the Sort It editor (2–4 boxes, 4–10 cards, a correct-box select per card, the
+  COMPLETENESS "Include an answer key" toggle) and the Spot It editor (the canvas image picker,
+  grid inputs with the image's limits and default, the author canvas, and the confirmation
+  checkbox), a "Needs review" badge with the server's reasons, and T7's round-trip rules: every
+  frozen field is sent back exactly as loaded unless edited (unedited labels untrimmed,
+  `points_value` as received, `accepted_cells` in stored order, optional keys present or absent as
+  loaded, the loaded stamp while the box stays ticked, a fresh stamp after any tick; choosing the
+  image that is already selected changes nothing, while a newer library version of it unticks the
+  box). Its text checks only approximate the server's (`trim` vs `isspace`, `toLowerCase` vs
+  `casefold`); the server's 422 shows in the form. A save adopts the response (review status included) instead of
+  reloading, because updates commit after responding; a Replace reloads the questions.
 - `RostersPage.tsx` — `my-courses` as a list of links to each course's roster.
 - `RosterPage.tsx` — roster list plus the **CSV column-mapping wizard**: client-side RFC-4180
   parser, header auto-detection, per-column transforms (strip `@domain`, reverse
@@ -66,12 +77,15 @@ and presentation.
   Gotchas). T8: the prompt image below the prompt (about 55% of the viewport; it stays up when
   the question locks), and for multiple choice / multi-select with any image option a lettered
   grid of full images with captions. Text-only questions still show no options here — phones
-  have them.
+  have them. T7: Sort It shows its boxes and cards (in the shared `cardOrder`); Spot It its image
+  under a labelled grid (`SpotItCanvas`), which stays up when the question locks.
 - `game/ResultsPage.tsx` — per-question results. Bar chart for choice-style questions, word cloud
   for fill-in-the-blank, and the auto-advance countdown. T8: a prompt thumbnail, and bar labels
-  of letter + thumbnail + caption once any option has an image.
+  of letter + thumbnail + caption once any option has an image. T7: Sort It's per-card table in
+  `cardOrder`, and Spot It's heatmap with its legend — shown only on entering RESULTS.
 - `game/GameOverPage.tsx` — final screen: score histogram, summary stats, and a per-question
-  breakdown card list. T8: each card shows the prompt thumbnail and option thumbnails.
+  breakdown card list. T8: each card shows the prompt thumbnail and option thumbnails. T7: Sort
+  It's per-card rows in the author's order, and a small Spot It heatmap (small link).
 
 ## How it fits in
 
@@ -120,6 +134,7 @@ but `sync_state` carries no results or game-over data, so recovery after a refre
   | `true_false` | max(true, false) |
   | `fill_in_the_blank` | max of the accepted-answer points |
   | `multi_select` | **sum** of the positive option points |
+  | `sort_into_boxes`, `find_in_image` (T7) | the value the author typed, in both modes |
   | any COMPLETENESS | the value the author typed |
 
   This is what makes the backend's reveal rule (`answer_points[i] >= points_value` ⇒ correct)
@@ -141,8 +156,9 @@ but `sync_state` carries no results or game-over data, so recovery after a refre
 - The server now validates every question edit structurally (a 422 with a readable message), so
   the editor is no longer the only thing enforcing shape on the edit path.
 - **Deleting an answered question is refused** (409, with the server's explanation shown in the
-  page's error line). Deletes, edits, and reorders are *not* blocked while a session of the game
-  is live — a mid-game edit can change what later questions show or how they score.
+  page's error line). Deletes, edits, and reorders of the original four types are *not* blocked
+  while a session of the game is live — a mid-game edit can change what later questions show or
+  how they score. T7's two types are frozen then (the server's 409 shows in the form).
 - **"Save, then reload" can briefly show stale data.** The backend commits some writes *after*
   sending the response (see [routers/CLAUDE.md](../../../../backend/app/routers/CLAUDE.md)), so
   the `await load()` that follows can read the old state — e.g. an admin's game delete or move,
@@ -218,9 +234,16 @@ but `sync_state` carries no results or game-over data, so recovery after a refre
 
 ### State and lifecycle
 
-- **`GameLayout`'s socket effect depends on `[code, navigate]`.** It tears down and reopens the
-  connection if either identity changes; keep `navigate` stable (it is, in React Router v6) or the
-  game reconnects on every render.
+- **`GameLayout`'s socket effect depends on `[code, navigate]`, and `navigate` is *not* stable
+  here** (B1, found during T7's browser checks; T7 spec §11). With a plain `BrowserRouter`, React
+  Router 6.30's `useNavigate` is rebuilt whenever the pathname changes, so every route change (lobby →
+  question → results → …) tears the socket down and opens a new one, which re-sends `join_room`.
+  It mostly works because join re-syncs, but it's churn, and in the player app it loses answers
+  (see [player pages/CLAUDE.md](../../../player/src/pages/CLAUDE.md)). The fix is to keep
+  `navigate` out of the effect's dependencies (read it through a ref). *Noted, not scheduled.*
+  It's linked to B2 (the backend never runs its host-disconnect handling for a started game; see
+  [websocket/CLAUDE.md](../../../../backend/app/websocket/CLAUDE.md)): B2 currently hides this
+  churn from the players, so fix B1 first or both together.
 - The `answer_phase_ended` handler filters on `currentQuestionIdRef` to drop stale events. This
   guards against the backend's orphaned-timer race — don't remove it.
 - Auto-advance is driven from two different pages with different timings: `QuestionPage` waits

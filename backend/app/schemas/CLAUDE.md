@@ -31,7 +31,10 @@ out.
 - `admin.py` — the authoring contract, by far the largest file: courses, roster
   import/patch, games, questions, local user accounts, access grants, and the admin session
   list. `QuestionCreate.validate_structure` is where the per-question-type JSON shape is actually
-  enforced. The game schemas are layered so a course can't sneak in where it doesn't belong:
+  enforced. For T7's two types it delegates to the pure `services/sort_it.py` and
+  `services/spot_it.py` (`validate`), which hold each type's rules once for every write path.
+  `QuestionResponse` carries `needs_review` / `review_reasons` (T7), computed by the service for
+  Spot It questions and never stored; every other type is `false` / `[]`. The game schemas are layered so a course can't sneak in where it doesn't belong:
   - `GameCreate` validates the `game` section of import bundles as well as requests, so it has
     **no** `course_id` and must not gain one (it's `extra="forbid"`, and course ids are
     database-specific while bundles are portable).
@@ -60,8 +63,9 @@ by hand (see [websocket/CLAUDE.md](../websocket/CLAUDE.md)).
 - **Image references are validated here for shape only** (T8, `_validate_image_refs`, called from
   `validate_structure`): `prompt_image_id` is a positive int (not a bool) on any type;
   `option_images`, only on `multiple_choice`/`multi_select`, has one entry per option, each a
-  positive int or null, with every option a string and blank only if it has an image; and a
-  non-null `image_id` is refused on every current type (T7 opens it for its canvas type). When
+  positive int or null, with every option a string and blank only if it has an image; and
+  `image_id` is **required** on `find_in_image` (T7's canvas type, where a non-null
+  `prompt_image_id` is refused) and refused, when non-null, on every other type. When
   `option_images` is absent or null, options are checked exactly as before T8. Whether the ids
   are in the game's library is checked in `image_service`, under the game lock. The key names
   come from `services/image_refs.py` (which imports nothing), not string literals.
@@ -70,17 +74,22 @@ by hand (see [websocket/CLAUDE.md](../websocket/CLAUDE.md)).
   question and validates the result with `QuestionCreate` (see
   [services/CLAUDE.md](../services/CLAUDE.md)). Anything that writes a question without going
   through that service skips the check.
-- **The question-type allowlist lives here and nowhere else.** The regex in `QuestionCreate` /
-  `QuestionUpdate` is the only enforcement of `multiple_choice | true_false |
-  fill_in_the_blank | multi_select`; the DB column is a plain string. Adding a question type means
-  editing both patterns, `validate_structure`, *and* every type branch in services, websocket, and
-  all three frontend apps — see the checklist in [app/CLAUDE.md](../CLAUDE.md).
+- **The question-type allowlist lives here and nowhere else.** `QUESTION_TYPE_PATTERN`, used by
+  both `QuestionCreate` and `QuestionUpdate`, is the only enforcement of `multiple_choice |
+  true_false | fill_in_the_blank | multi_select | sort_into_boxes | find_in_image`; the DB column
+  is a plain string. Adding a question type means editing that pattern, `validate_structure`,
+  *and* every type branch in services, websocket, and the host and player apps — see the
+  checklist in [app/CLAUDE.md](../CLAUDE.md).
 - **`answer_data` key naming is inconsistent between types** and must be matched exactly:
   `multiple_choice` / `multi_select` use `answer_points`, but `fill_in_the_blank` uses
   `acceptedAnswers` / `answerPoints` / `editDistance`. `true_false` uses `answer_points` as a
-  *dict* keyed `"true"`/`"false"`, not a list.
+  *dict* keyed `"true"`/`"false"`, not a list. T7: Sort It uses `correct_boxes`, Spot It
+  `accepted_cells` and `confirmed_for` (the confirmation stamp; `null` is accepted in a request
+  and removed by the service before writing).
 - **`COMPLETENESS` questions get almost no `answer_data` validation** — the structural checks are
   mostly gated on `grading_type == "ACCURACY"`. Only the `options` length check applies to both.
+  T7's types are the exception: their optional COMPLETENESS keys are validated whenever present,
+  and unknown keys are refused in `config` and `answer_data` alike.
 - **Length limits disagree with the database.** `RosterRowIn.netid` and `RosterEntryPatch.netid`
   allow 100 chars, but `CourseRoster.netid` is `String(50)`. A netid between 51 and 100 chars
   passes validation and then fails (or truncates) at the DB.

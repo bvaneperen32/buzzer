@@ -183,6 +183,9 @@ def _assert_answer_matches(label: str, submitted: dict, actual: dict):
             f"{label}: stored text {actual.get('text')!r} "
             f"≠ submitted {submitted['text']!r}"
         )
+    if "placements" in submitted:
+        # T7: the validated answer is stored unchanged.
+        assert actual == submitted, f"{label}: stored {actual} ≠ submitted {submitted}"
 
 
 def _assert_ranking_order(scenario, payloads: list[dict]):
@@ -244,4 +247,11 @@ def _assert_reveal_content(label: str, q_spec, actual_reveal: dict, expected_rev
         assert actual_reveal.get("editDistance") == expected_reveal.get("editDistance"), (
             f"{label}: editDistance {actual_reveal.get('editDistance')} "
             f"≠ expected {expected_reveal.get('editDistance')}"
+        )
+
+    if kind == "sort_into_boxes":
+        # Order matters: one correct box per card, in the author's card order.
+        assert actual_reveal.get("correctBoxes") == expected_reveal.get("correctBoxes"), (
+            f"{label}: correctBoxes {actual_reveal.get('correctBoxes')} "
+            f"≠ expected {expected_reveal.get('correctBoxes')}"
         )

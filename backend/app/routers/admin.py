@@ -17,6 +17,7 @@ from ..models.course import Course, CourseRoster, UserCourseAccess
 from ..models.game import Game, Question, UserGameAccess
 from ..models.session import GameSession, SessionScore
 from ..models.user import User
+from ..redis_client import get_redis
 from ..schemas.admin import (
     AdminGameUpdate,
     AdminSessionItem,
@@ -277,9 +278,10 @@ async def create_question(
     body: QuestionCreate,
     admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis=Depends(get_redis),
 ) -> Question:
     await game_service.assert_host_can_use_game(db, admin, game_id)
-    question = await game_management_service.create_question(db, game_id, body)
+    question = await game_management_service.create_question(db, game_id, body, redis)
     await db.commit()
     return question
 
@@ -291,9 +293,12 @@ async def update_question(
     body: QuestionUpdate,
     admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    redis=Depends(get_redis),
 ) -> Question:
     await game_service.assert_host_can_use_game(db, admin, game_id)
-    return await game_management_service.update_question(db, game_id, question_id, body)
+    return await game_management_service.update_question(
+        db, game_id, question_id, body, redis
+    )
 
 
 @router.delete("/games/{game_id}/questions/{question_id}", status_code=204)

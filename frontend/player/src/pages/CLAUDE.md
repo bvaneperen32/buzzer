@@ -36,11 +36,19 @@ questions, and reviewing results. Plus `GameLayout`, which owns the socket and a
   any. Tapping works exactly as before — one tap submits multiple choice; multi-select toggles,
   then Submit. An option whose id isn't in `images` is a text-only tile. Each image tile's
   accessible name is "Option B: {caption}. Image: {description}" (or without the caption).
+  T7: Sort It renders `SortBoard` and Spot It `SpotCanvas`, each keyed by `questionId`, so a
+  lock, an unlock or a socket reconnect's late-join `new_question` never clears the player's
+  placements or selection — they only toggle `disabled`. Nothing is ever submitted
+  automatically; a board never submitted shows "No answer" at results.
 - `FeedbackPage.tsx` — static "Answer locked in" screen with a spinner.
 - `ResultsPage.tsx` — per-question outcome: correct/incorrect, what you answered, points, running
-  total, and rank.
+  total, and rank. T7 questions render from the `question_results` payload alone
+  (`lib/t7Results.ts`: "6 of 8 correct, 1 left out", "You picked B3 — Correct", "No answer",
+  points as "687.5 of 1,000 points"), so they're right after a reload between answering and
+  results.
 - `GameOverPage.tsx` — final rank and score, plus a per-question recap with your answer and the
-  correct one.
+  correct one. T7 questions get one line each ("Sort It — 6 of 8 correct, 1 left out · 687.5 /
+  1,000 pts", "Spot It — You picked B3 — Correct · Correct cells: B3, C3 · 1,000 / 1,000 pts").
 
 ## How it fits in
 
@@ -55,6 +63,26 @@ check with `isTokenExpired` and redirects to `/name/{code}`, which preserves the
 was trying to join.
 
 ## Gotchas
+
+### Every navigation re-creates the socket, and an answer can be lost (B1)
+
+*Found during T7's browser checks; recorded as B1 in the T7 spec's §11; noted, not scheduled.*
+`GameLayout`'s socket effect depends on
+`[code, navigate]`, and React Router 6.30's `useNavigate` (with a plain `BrowserRouter`) changes
+identity whenever the pathname changes. So each route change — `new_question` → `/question`,
+`answer_received` → `/feedback`, `question_results` → `/results` — disconnects the socket and
+connects a new one, which re-sends `join_room` (the backend logs `player_disconnected` /
+`player_joined` pairs at every step). An answer emitted in the few tens of milliseconds before the
+new socket has joined is **lost silently**: socket.io flushes buffered emits before the `connect`
+handler sends `join_room`, so the server has no context for that sid and ignores the
+`submit_answer`, and the phone waits on "Answer submitted" until results ("No answer"). Humans
+rarely answer that fast; scripts do. The T7 browser checks (`tests/browser/`) wait for the new
+socket's `sync_state` before acting — an event, not a delay — and report B1 separately as a known
+issue (XFAIL). The fix is to keep `navigate` out of the effect's dependencies, e.g. through a ref;
+the host app has the same churn. **Fix it before, or together with, B2** (the host's disconnect
+handling never runs; see the backend's
+[websocket/CLAUDE.md](../../../../backend/app/websocket/CLAUDE.md)): with B2 fixed alone, every
+host screen change would look to the server like a host disconnect.
 
 ### The phone deliberately doesn't show the question
 
@@ -111,6 +139,10 @@ and typed, so it looks like an oversight. Don't "fix" it without checking the in
     the error screen and can't see their final results again.
 - The "Host disconnected" banner is cleared only by `new_question`. The server has no "host
   reconnected" event, so once the host is back the banner stays up until the next question.
+  **In practice the banner never appears** (B2, pre-existing): the server skips its host-
+  disconnect handling for a started game, so a phone gets no lock and no banner when the
+  projector goes away. See the backend's
+  [websocket/CLAUDE.md](../../../../backend/app/websocket/CLAUDE.md).
 - Any socket `error` replaces the whole screen (see [src/CLAUDE.md](../CLAUDE.md)); a tap just
   after the auto-lock gets "Question is locked" and ejects the player.
 - `QuestionPage`'s `startTimeRef` is initialised at mount, so `answer_time_ms` measures from when

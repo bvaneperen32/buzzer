@@ -72,8 +72,8 @@ in the image** — `docker compose exec backend pytest` finds nothing. Run them 
 the venv active:
 
 ```bash
-cd tests/unit && pytest -v          # mocked DB/Redis, no stack needed
-cd tests/integration && pytest -v   # needs the compose stack up
+cd tests/unit && PYTHONPATH=../../backend python -m pytest -v   # mocked DB/Redis, no stack needed
+cd tests/integration && python -m pytest -v                     # needs the compose stack up
 ```
 
 ## Architecture

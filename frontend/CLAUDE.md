@@ -101,7 +101,9 @@ The `config.py` default omits `:5174`, so the player socket works in dev only if
   library list; the projector's session link map, `GET /api/game/sessions/{id}/images`); phones
   get small links for option images inside `new_question` (`images`). An image id a screen
   can't resolve means "no image" — show the letter and caption, never a broken icon. Question
-  `config` carries the ids (`prompt_image_id`, `option_images`) in snake_case on both transports.
+  `config` carries the ids (`prompt_image_id`, `option_images`, and T7's Spot It `image_id`) in
+  snake_case on both transports. Phones never get a link for a Spot It image: they draw only its
+  grid, from `config.grid` and the image's proportions (`config.width` / `height`).
 - Styling is Tailwind with hardcoded slate/indigo colours, dark-only, no theme layer.
 
 ## Gotchas
@@ -111,7 +113,12 @@ The `config.py` default omits `:5174`, so the player socket works in dev only if
 `Button`, `Card`, `Input`, `cn`, `api.ts`, and `TimerBar` exist in **three separate copies**, and
 they have already drifted. T8 adds two more copied pieces, in host and player only: `SafeImage`
 (host: refreshes links and offers Retry; player: one same-link retry, no button — deliberate) and
-`lib/questionImages.ts` (reading image ids out of `config`, the option labels):
+`lib/questionImages.ts` (reading image ids out of `config`, the option labels). T7 adds
+`lib/spotGrid.ts` and `lib/canvasColors.ts` to both, and neither pair is a full copy. The host's
+`spotGrid.ts` holds the grid limits (`maxGrid` / `gridFits` / `defaultGrid`, copied from the
+backend's `spot_it`, the authority) plus labels, readers, canvas layout, heat steps and the
+editor's texts; the player's repeats only the labels, readers and canvas layout, with no limits.
+Each `canvasColors.ts` holds only its own app's canvas colours. How the older copies differ:
 
 - Admin's `Button` / `Card` / `Input` / `utils.ts` are **byte-identical** to host's.
 - Player's are the same API deliberately **retuned for touch** (larger padding, `active:scale-95`,
@@ -156,7 +163,21 @@ and player `LoginPage`s, which still reads only `detail`. *Noted, not scheduled.
   title-case differently, so the same student's stored name depends on the import path used.
 - **`points_value` is derived by host's question editor**, and host's game screens and the player
   both read correctness off that relationship. It's an undocumented contract spanning the
-  frontend apps and the backend.
+  frontend apps and the backend. (T7's two types are the exception: the author types their
+  points value in both grading modes.)
+- **Spot It's grid limits** (T7) — two implementations in the same integer arithmetic: the
+  backend's `spot_it.max_grid` / `default_grid` (the authority; the server's confirmation check
+  decides) and the host's `lib/spotGrid.ts`, which gives the editor its limits and default grid. A
+  browser check compares the editor's limits with the server's on edge-size images. The player
+  has no limits: its `lib/spotGrid.ts` copies only the host's labels, readers and canvas layout,
+  so a change to those belongs in both apps.
+- **Sort It's results percentages** (T7) — `sort_it.results_breakdown` (the report) and the host's
+  `lib/sortResults.ts` (ResultsPage and GameOverPage): integer half-up percentages, ties to the
+  lowest box, "—" with no answers. A browser check compares the projector with the report.
+- **T7's points display** — the phone's `lib/formatPoints.ts` (`Intl.NumberFormat`, the viewer's
+  locale) and the report's `format_points` (`Decimal(repr(x))`, half up) agree because both round
+  the value's shortest decimal representation (0.15 → "0.2", 2.55 → "2.6"). Switching the report
+  to `Decimal(x)` would break that; unit tests pin it.
 
 ### Shared shortcuts
 
