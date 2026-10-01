@@ -53,15 +53,15 @@ function Meter({ label, value, limit, format }: {
   return (
     <div className="flex-1 min-w-40">
       <div className="flex justify-between text-xs mb-1">
-        <span className="text-slate-400">{label}</span>
-        <span className={over ? 'text-red-400 font-semibold' : 'text-slate-300'}>
+        <span className="text-secondary">{label}</span>
+        <span className={over ? 'text-danger font-semibold' : 'text-secondary'}>
           {format(value)} / {format(limit)}
           {over && ' — over the limit'}
         </span>
       </div>
-      <div className="h-1.5 rounded-full bg-slate-700 overflow-hidden">
+      <div className="h-1.5 rounded-full bg-meter-track overflow-hidden">
         <div
-          className={`h-full rounded-full ${over ? 'bg-red-500' : pct > 85 ? 'bg-amber-500' : 'bg-indigo-500'}`}
+          className={`h-full rounded-full ${over ? 'bg-meter-danger' : pct > 85 ? 'bg-meter-warning' : 'bg-meter-accent'}`}
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -71,11 +71,11 @@ function Meter({ label, value, limit, format }: {
 
 function LiveBanner({ sessions }: { sessions: LiveSessionItem[] }) {
   return (
-    <div role="status" className="rounded-lg border border-amber-600/60 bg-amber-900/20 p-3 text-sm space-y-1">
-      <p className="flex items-center gap-2 font-semibold text-amber-300">
+    <div role="status" className="rounded-lg border border-warning bg-warning-subtle p-3 text-sm space-y-1">
+      <p className="flex items-center gap-2 font-semibold text-warning">
         <AlertTriangle size={14} /> A session of this game is live, so images can't be replaced or deleted.
       </p>
-      <ul className="text-amber-200/90 text-xs space-y-0.5">
+      <ul className="text-primary text-xs space-y-0.5">
         {sessions.map((s) => (
           <li key={s.session_id}>
             Room <span className="font-mono">{s.room_code}</span> · {s.status === 'LOBBY' ? 'in the lobby' : 'in progress'}
@@ -83,7 +83,7 @@ function LiveBanner({ sessions }: { sessions: LiveSessionItem[] }) {
           </li>
         ))}
       </ul>
-      <p className="text-xs text-amber-200/80">
+      <p className="text-xs text-primary">
         The session's host can rejoin and finish it, or delete it from Play (deleting discards its partial scores).
         Anyone else can ask that host or an admin; admins can delete sessions from Sessions. Uploads and description
         edits still work.
@@ -175,8 +175,8 @@ export function ImageLibraryPanel({
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-slate-100">Images</h3>
-          <span className="text-slate-500 text-xs">PNG, JPEG, WebP or GIF · up to {formatLimit(IMAGE_INPUT_LIMIT_BYTES)} each</span>
+          <h3 className="font-semibold text-primary">Images</h3>
+          <span className="text-secondary text-xs">PNG, JPEG, WebP or GIF · up to {formatLimit(IMAGE_INPUT_LIMIT_BYTES)} each</span>
         </div>
       </CardHeader>
       <CardContent>
@@ -190,8 +190,8 @@ export function ImageLibraryPanel({
           )}
 
           {blocked && <LiveBanner sessions={live} />}
-          {error && <p className="text-red-400 text-sm">{error}</p>}
-          {actionError && <p className="text-red-400 text-sm">{actionError}</p>}
+          {error && <p className="text-danger text-sm">{error}</p>}
+          {actionError && <p className="text-danger text-sm">{actionError}</p>}
 
           {/* Upload */}
           <div className="flex flex-wrap items-center gap-2">
@@ -209,7 +209,7 @@ export function ImageLibraryPanel({
                   setFile(f);
                 }
               }}
-              className="text-xs text-slate-300 file:mr-2 file:rounded file:border-0 file:bg-slate-700 file:px-2 file:py-1 file:text-slate-200"
+              className="text-xs text-secondary file:mr-2 file:rounded file:border-0 file:bg-hover file:px-2 file:py-1 file:text-primary"
               aria-label="Image file to upload"
             />
             <Input
@@ -235,13 +235,13 @@ export function ImageLibraryPanel({
           />
 
           {loading && !library ? (
-            <p className="text-slate-400 text-sm">Loading images…</p>
+            <p className="text-secondary text-sm">Loading images…</p>
           ) : images.length === 0 ? (
-            <p className="text-slate-500 text-sm">No images yet. Upload one here, or from a question's image picker.</p>
+            <p className="text-secondary text-sm">No images yet. Upload one here, or from a question's image picker.</p>
           ) : (
             <ul className="space-y-2">
               {images.map((img: ImageItem) => (
-                <li key={img.id} className="flex items-start gap-3 rounded-lg border border-slate-700 bg-slate-900/40 p-2">
+                <li key={img.id} className="flex items-start gap-3 rounded-lg border border-subtle bg-raised p-2">
                   <SafeImage
                     key={img.id}
                     src={img.small_url}
@@ -269,18 +269,18 @@ export function ImageLibraryPanel({
                         <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
                       </div>
                     ) : (
-                      <p className="text-slate-100 text-sm break-words">{img.description}</p>
+                      <p className="text-primary text-sm break-words">{img.description}</p>
                     )}
-                    <p className="text-slate-500 text-xs truncate">
+                    <p className="text-secondary text-xs truncate">
                       {img.filename} · {img.width}×{img.height} · {formatBytes(img.byte_size)}
                       {img.version > 1 && ` · replaced ${img.version - 1}×`}
                     </p>
-                    <p className={`text-xs ${img.used_by.length ? 'text-slate-300' : 'text-slate-500'}`}>
+                    <p className={`text-xs ${img.used_by.length ? 'text-primary' : 'text-secondary'}`}>
                       {describeUses(img.used_by)}
                     </p>
                     {confirmReplace === img.id && (
                       <div className="flex flex-wrap items-center gap-2 pt-1" role="alert">
-                        <span className="text-amber-300 text-xs">
+                        <span className="text-warning text-xs">
                           {canvasUses(img.used_by).join(', ')} will need review: the accepted cells
                           must be checked against the new image.
                         </span>
@@ -301,7 +301,7 @@ export function ImageLibraryPanel({
                     )}
                     {confirmDelete === img.id && (
                       <div className="flex items-center gap-2 pt-1">
-                        <span className="text-red-400 text-xs">Delete this image from the library?</span>
+                        <span className="text-danger text-xs">Delete this image from the library?</span>
                         <Button type="button" size="sm" variant="destructive" onClick={() => void remove(img.id)} disabled={busy !== null}>
                           {busy === `delete-${img.id}` ? 'Deleting…' : 'Confirm'}
                         </Button>

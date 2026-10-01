@@ -10,13 +10,12 @@ export function Button({ className, variant = 'default', size = 'md', ...props }
     <button
       className={cn(
         'inline-flex items-center justify-center rounded-xl font-semibold transition-colors',
-        'focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900',
         'disabled:opacity-50 disabled:pointer-events-none',
         'active:scale-95',
-        variant === 'default' && 'bg-indigo-600 text-white hover:bg-indigo-500 focus:ring-indigo-500',
-        variant === 'outline' && 'border border-slate-600 text-slate-200 hover:bg-slate-700 focus:ring-slate-500',
-        variant === 'ghost' && 'text-slate-300 hover:bg-slate-700 hover:text-slate-100',
-        variant === 'destructive' && 'bg-red-600 text-white hover:bg-red-500 focus:ring-red-500',
+        variant === 'default' && 'bg-accent text-on-accent hover:bg-accent-hover',
+        variant === 'outline' && 'border border-input text-primary hover:bg-hover',
+        variant === 'ghost' && 'text-secondary hover:bg-hover hover:text-primary',
+        variant === 'destructive' && 'bg-danger text-on-danger hover:bg-danger-hover',
         size === 'sm' && 'px-3 py-2 text-sm',
         size === 'md' && 'px-5 py-3 text-base',
         size === 'lg' && 'px-6 py-4 text-lg',

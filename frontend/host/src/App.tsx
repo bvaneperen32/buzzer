@@ -1,4 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { ThemeToggle } from './components/ui/ThemeToggle';
 import LoginPage from './pages/LoginPage';
 import HostShell from './pages/HostShell';
 import HomePage from './pages/HomePage';
@@ -41,6 +42,8 @@ export default function App() {
         {/* Also catches /. RequireAuth sends signed-out users on to /login. */}
         <Route path="*" element={<Navigate to="/home" replace />} />
       </Routes>
+      {/* Outside the routes, so every screen has it (login, notices, game screens) */}
+      <ThemeToggle />
     </BrowserRouter>
   );
 }

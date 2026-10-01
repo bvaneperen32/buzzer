@@ -61,10 +61,10 @@ export default function LoginPage() {
     return (
       <div className="min-h-screen flex items-center justify-center p-4">
         <div className="text-center space-y-4">
-          <p className="text-red-400">{error}</p>
+          <p className="text-danger">{error}</p>
           <button
             onClick={() => navigate('/join')}
-            className="text-indigo-400 hover:underline text-sm"
+            className="text-accent hover:underline text-sm"
           >
             ← Back to join
           </button>
@@ -75,7 +75,7 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
-      <p className="text-slate-400">Signing in…</p>
+      <p className="text-secondary">Signing in…</p>
     </div>
   );
 }

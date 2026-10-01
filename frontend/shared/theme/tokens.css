@@ -1,0 +1,430 @@
+/*
+ * Buzzer colour tokens: the only file in the frontend that contains colour values.
+ *
+ * Shared by host, player and admin (each app's src/index.css imports it first). Two layers:
+ *   1. Primitives: every step 1-12 of ten Radix Colors scales, copied verbatim from
+ *      @radix-ui/colors@3.0.0 (<scale>.css for light, <scale>-dark.css for dark). Components
+ *      never use these directly.
+ *   2. Semantic tokens (--bg-surface, --text-primary, ...): a var() to a primitive when the value
+ *      is a Radix step in the current theme; otherwise a literal with a source comment (an
+ *      override that fixes a WCAG failure, white, or a value taken from the other theme's scale).
+ * Tailwind exposes only the semantic tokens (preset.js).
+ *
+ * Every value is a channel triple ("r g b"), so Tailwind's opacity modifier (bg-surface/90)
+ * works: classes resolve to rgb(var(--token) / <alpha>).
+ *
+ * The format is parsed by scripts/check_theme.py - see docs/plans/t9-ui-theming.md section 2.4:
+ * exactly two blocks, :root (light, and the fallback) then :root[data-theme="dark"] (only what
+ * differs in dark); one "--name: value;" per line, where value is a channel triple or
+ * var(--name); comments anywhere.
+ */
+
+:root {
+  /* ---- Primitives (light) ---- */
+
+  /* sage - @radix-ui/colors@3.0.0 sage.css */
+  --sage-1: 251 253 252; /* #fbfdfc */
+  --sage-2: 247 249 248; /* #f7f9f8 */
+  --sage-3: 238 241 240; /* #eef1f0 */
+  --sage-4: 230 233 232; /* #e6e9e8 */
+  --sage-5: 223 226 224; /* #dfe2e0 */
+  --sage-6: 215 218 217; /* #d7dad9 */
+  --sage-7: 203 207 205; /* #cbcfcd */
+  --sage-8: 184 188 186; /* #b8bcba */
+  --sage-9: 134 142 139; /* #868e8b */
+  --sage-10: 124 132 129; /* #7c8481 */
+  --sage-11: 95 101 99; /* #5f6563 */
+  --sage-12: 26 33 30; /* #1a211e */
+
+  /* teal - @radix-ui/colors@3.0.0 teal.css */
+  --teal-1: 250 254 253; /* #fafefd */
+  --teal-2: 243 251 249; /* #f3fbf9 */
+  --teal-3: 224 248 243; /* #e0f8f3 */
+  --teal-4: 204 243 234; /* #ccf3ea */
+  --teal-5: 184 234 224; /* #b8eae0 */
+  --teal-6: 161 222 210; /* #a1ded2 */
+  --teal-7: 131 205 193; /* #83cdc1 */
+  --teal-8: 83 185 171; /* #53b9ab */
+  --teal-9: 18 165 148; /* #12a594 */
+  --teal-10: 13 155 138; /* #0d9b8a */
+  --teal-11: 0 133 115; /* #008573 */
+  --teal-12: 13 61 56; /* #0d3d38 */
+
+  /* red - @radix-ui/colors@3.0.0 red.css */
+  --red-1: 255 252 252; /* #fffcfc */
+  --red-2: 255 247 247; /* #fff7f7 */
+  --red-3: 254 235 236; /* #feebec */
+  --red-4: 255 219 220; /* #ffdbdc */
+  --red-5: 255 205 206; /* #ffcdce */
+  --red-6: 253 189 190; /* #fdbdbe */
+  --red-7: 244 169 170; /* #f4a9aa */
+  --red-8: 235 142 144; /* #eb8e90 */
+  --red-9: 229 72 77; /* #e5484d */
+  --red-10: 220 62 66; /* #dc3e42 */
+  --red-11: 206 44 49; /* #ce2c31 */
+  --red-12: 100 23 35; /* #641723 */
+
+  /* grass - @radix-ui/colors@3.0.0 grass.css */
+  --grass-1: 251 254 251; /* #fbfefb */
+  --grass-2: 245 251 245; /* #f5fbf5 */
+  --grass-3: 233 246 233; /* #e9f6e9 */
+  --grass-4: 218 241 219; /* #daf1db */
+  --grass-5: 201 232 202; /* #c9e8ca */
+  --grass-6: 178 221 181; /* #b2ddb5 */
+  --grass-7: 148 206 154; /* #94ce9a */
+  --grass-8: 101 186 116; /* #65ba74 */
+  --grass-9: 70 167 88; /* #46a758 */
+  --grass-10: 62 155 79; /* #3e9b4f */
+  --grass-11: 42 126 59; /* #2a7e3b */
+  --grass-12: 32 60 37; /* #203c25 */
+
+  /* amber - @radix-ui/colors@3.0.0 amber.css */
+  --amber-1: 254 253 251; /* #fefdfb */
+  --amber-2: 254 251 233; /* #fefbe9 */
+  --amber-3: 255 247 194; /* #fff7c2 */
+  --amber-4: 255 238 156; /* #ffee9c */
+  --amber-5: 251 229 119; /* #fbe577 */
+  --amber-6: 243 214 115; /* #f3d673 */
+  --amber-7: 233 193 98; /* #e9c162 */
+  --amber-8: 226 163 54; /* #e2a336 */
+  --amber-9: 255 197 61; /* #ffc53d */
+  --amber-10: 255 186 24; /* #ffba18 */
+  --amber-11: 171 100 0; /* #ab6400 */
+  --amber-12: 79 52 34; /* #4f3422 */
+
+  /* blue - @radix-ui/colors@3.0.0 blue.css */
+  --blue-1: 251 253 255; /* #fbfdff */
+  --blue-2: 244 250 255; /* #f4faff */
+  --blue-3: 230 244 254; /* #e6f4fe */
+  --blue-4: 213 239 255; /* #d5efff */
+  --blue-5: 194 229 255; /* #c2e5ff */
+  --blue-6: 172 216 252; /* #acd8fc */
+  --blue-7: 142 200 246; /* #8ec8f6 */
+  --blue-8: 94 177 239; /* #5eb1ef */
+  --blue-9: 0 144 255; /* #0090ff */
+  --blue-10: 5 136 240; /* #0588f0 */
+  --blue-11: 13 116 206; /* #0d74ce */
+  --blue-12: 17 50 100; /* #113264 */
+
+  /* yellow - @radix-ui/colors@3.0.0 yellow.css */
+  --yellow-1: 253 253 249; /* #fdfdf9 */
+  --yellow-2: 254 252 233; /* #fefce9 */
+  --yellow-3: 255 250 184; /* #fffab8 */
+  --yellow-4: 255 243 148; /* #fff394 */
+  --yellow-5: 255 231 112; /* #ffe770 */
+  --yellow-6: 243 215 104; /* #f3d768 */
+  --yellow-7: 228 199 103; /* #e4c767 */
+  --yellow-8: 213 174 57; /* #d5ae39 */
+  --yellow-9: 255 230 41; /* #ffe629 */
+  --yellow-10: 255 220 0; /* #ffdc00 */
+  --yellow-11: 158 108 0; /* #9e6c00 */
+  --yellow-12: 71 59 31; /* #473b1f */
+
+  /* purple - @radix-ui/colors@3.0.0 purple.css */
+  --purple-1: 254 252 254; /* #fefcfe */
+  --purple-2: 251 247 254; /* #fbf7fe */
+  --purple-3: 247 237 254; /* #f7edfe */
+  --purple-4: 242 226 252; /* #f2e2fc */
+  --purple-5: 234 213 249; /* #ead5f9 */
+  --purple-6: 224 196 244; /* #e0c4f4 */
+  --purple-7: 209 175 236; /* #d1afec */
+  --purple-8: 190 147 228; /* #be93e4 */
+  --purple-9: 142 78 198; /* #8e4ec6 */
+  --purple-10: 131 71 185; /* #8347b9 */
+  --purple-11: 129 69 181; /* #8145b5 */
+  --purple-12: 64 32 96; /* #402060 */
+
+  /* orange - @radix-ui/colors@3.0.0 orange.css */
+  --orange-1: 254 252 251; /* #fefcfb */
+  --orange-2: 255 247 237; /* #fff7ed */
+  --orange-3: 255 239 214; /* #ffefd6 */
+  --orange-4: 255 223 181; /* #ffdfb5 */
+  --orange-5: 255 209 154; /* #ffd19a */
+  --orange-6: 255 193 130; /* #ffc182 */
+  --orange-7: 245 174 115; /* #f5ae73 */
+  --orange-8: 236 148 85; /* #ec9455 */
+  --orange-9: 247 107 21; /* #f76b15 */
+  --orange-10: 239 95 0; /* #ef5f00 */
+  --orange-11: 204 78 0; /* #cc4e00 */
+  --orange-12: 88 45 29; /* #582d1d */
+
+  /* pink - @radix-ui/colors@3.0.0 pink.css */
+  --pink-1: 255 252 254; /* #fffcfe */
+  --pink-2: 254 247 251; /* #fef7fb */
+  --pink-3: 254 233 245; /* #fee9f5 */
+  --pink-4: 251 220 239; /* #fbdcef */
+  --pink-5: 246 206 231; /* #f6cee7 */
+  --pink-6: 239 191 221; /* #efbfdd */
+  --pink-7: 231 172 208; /* #e7acd0 */
+  --pink-8: 221 147 194; /* #dd93c2 */
+  --pink-9: 214 64 159; /* #d6409f */
+  --pink-10: 207 56 151; /* #cf3897 */
+  --pink-11: 194 41 138; /* #c2298a */
+  --pink-12: 101 18 73; /* #651249 */
+
+  /* ---- Semantic tokens (light, and the definition dark uses unless redeclared below) ---- */
+
+  /* Neutral backgrounds: pages, cards, inputs, interaction states */
+  --bg-canvas: var(--sage-2);
+  --bg-surface: var(--sage-1);
+  --bg-raised: var(--sage-3);
+  --bg-hover: var(--sage-4);
+  --bg-selected: var(--sage-5);
+
+  /* Accent and status fills: solid buttons, badges, tinted boxes */
+  --bg-accent: 4 111 97; /* #046f61 override: teal-11 -> teal-12 30% */
+  --bg-accent-hover: 7 97 86; /* #076156 override: teal-11 -> teal-12 50% */
+  --bg-accent-subtle: var(--teal-3);
+  --bg-danger: var(--red-11);
+  --bg-danger-hover: 174 38 45; /* #ae262d override: red-11 -> red-12 30% */
+  --bg-danger-subtle: var(--red-3);
+  --bg-success: var(--grass-11);
+  --bg-success-hover: 39 106 52; /* #276a34 override: grass-11 -> grass-12 30% */
+  --bg-success-subtle: var(--grass-3);
+  --bg-warning: var(--amber-9);
+  --bg-warning-hover: var(--amber-10);
+  --bg-warning-subtle: var(--amber-3);
+
+  /* Text */
+  --text-primary: var(--sage-12);
+  --text-secondary: var(--sage-11);
+  --text-disabled: var(--sage-8);
+  --text-accent: 4 111 97; /* #046f61 override: teal-11 -> teal-12 30% */
+  --text-danger: 188 40 47; /* #bc282f override: red-11 -> red-12 17% */
+  --text-success: 40 112 54; /* #287036 override: grass-11 -> grass-12 21% */
+  --text-warning: 142 85 11; /* #8e550b override: amber-11 -> amber-12 31% */
+  --text-on-accent: 255 255 255; /* #ffffff white */
+  --text-on-danger: 255 255 255; /* #ffffff white */
+  --text-on-success: 255 255 255; /* #ffffff white */
+  --text-on-warning: var(--sage-12);
+
+  /* Borders and focus */
+  --border-subtle: var(--sage-6);
+  --border-strong: var(--sage-8);
+  --border-input: var(--sage-10);
+  --ring-focus: var(--teal-11);
+
+  /* Fixed-appearance surfaces: the same in both themes (QR tile, behind images) */
+  --bg-media: 251 253 252; /* #fbfdfc light sage-1 */
+  --text-on-media: 26 33 30; /* #1a211e light sage-12 */
+
+  /*
+   * Spot It canvases (T7), drawn over the image, which looks the same in both themes: fixed, so
+   * never redeclared in the dark block. T7's own values. Canvases read them at draw time
+   * (lib/canvasColors.ts, which also holds the alphas); Tailwind doesn't map them.
+   */
+  --canvas-ink: 0 0 0; /* #000000 T7 grid dark stroke, text halo, Correct outer outline */
+  --canvas-paper: 255 255 255; /* #ffffff T7 grid light stroke, counts, Correct inner outline */
+  --heat-1: 68 1 84; /* #440154 T7 heat ramp (viridis) */
+  --heat-2: 59 82 139; /* #3b528b T7 heat ramp (viridis) */
+  --heat-3: 33 145 140; /* #21918c T7 heat ramp (viridis) */
+  --heat-4: 94 201 98; /* #5ec962 T7 heat ramp (viridis) */
+  --heat-5: 253 231 37; /* #fde725 T7 heat ramp (viridis) */
+  --canvas-accepted: 34 197 94; /* #22c55e T7 editor accepted cells */
+  --canvas-cursor: 129 140 248; /* #818cf8 T7 editor keyboard cursor */
+
+  /* Meters: each fill is its role's text colour, so it clears 3:1 on every neutral background */
+  --bg-meter-success: var(--text-success);
+  --bg-meter-warning: var(--text-warning);
+  --bg-meter-danger: var(--text-danger);
+  --bg-meter-accent: var(--text-accent);
+  --bg-meter-neutral: var(--text-secondary);
+  --bg-meter-track: var(--bg-selected);
+  --text-on-meter: 255 255 255; /* #ffffff white */
+
+  /* Answer-option tiles (player only), in OPTION_COLORS order. Every tile carries the same dark
+     text in both themes, so red, purple and pink use fills light enough for it. */
+  --bg-option-1: 236 93 94; /* #ec5d5e dark red-10 */
+  --bg-option-2: var(--blue-9);
+  --bg-option-3: var(--yellow-9);
+  --bg-option-4: var(--grass-9);
+  --bg-option-5: 166 112 213; /* #a670d5 override: purple-9 -> purple-8 50% */
+  --bg-option-6: var(--orange-9);
+  --bg-option-7: 222 81 168; /* #de51a8 dark pink-10 */
+  --bg-option-8: var(--teal-9);
+  --text-on-option-1: 26 33 30; /* #1a211e light sage-12 */
+  --text-on-option-2: 26 33 30; /* #1a211e light sage-12 */
+  --text-on-option-3: 26 33 30; /* #1a211e light sage-12 */
+  --text-on-option-4: 26 33 30; /* #1a211e light sage-12 */
+  --text-on-option-5: 26 33 30; /* #1a211e light sage-12 */
+  --text-on-option-6: 26 33 30; /* #1a211e light sage-12 */
+  --text-on-option-7: 26 33 30; /* #1a211e light sage-12 */
+  --text-on-option-8: 26 33 30; /* #1a211e light sage-12 */
+}
+
+:root[data-theme="dark"] {
+  /* ---- Primitives (dark): the same names, redefined ---- */
+
+  /* sageDark - @radix-ui/colors@3.0.0 sage-dark.css */
+  --sage-1: 16 18 17; /* #101211 */
+  --sage-2: 23 25 24; /* #171918 */
+  --sage-3: 32 34 33; /* #202221 */
+  --sage-4: 39 42 41; /* #272a29 */
+  --sage-5: 46 49 48; /* #2e3130 */
+  --sage-6: 55 59 57; /* #373b39 */
+  --sage-7: 68 73 71; /* #444947 */
+  --sage-8: 91 98 95; /* #5b625f */
+  --sage-9: 99 112 107; /* #63706b */
+  --sage-10: 113 125 121; /* #717d79 */
+  --sage-11: 173 181 178; /* #adb5b2 */
+  --sage-12: 236 238 237; /* #eceeed */
+
+  /* tealDark - @radix-ui/colors@3.0.0 teal-dark.css */
+  --teal-1: 13 21 20; /* #0d1514 */
+  --teal-2: 17 28 27; /* #111c1b */
+  --teal-3: 13 45 42; /* #0d2d2a */
+  --teal-4: 2 59 55; /* #023b37 */
+  --teal-5: 8 72 67; /* #084843 */
+  --teal-6: 20 87 80; /* #145750 */
+  --teal-7: 28 105 97; /* #1c6961 */
+  --teal-8: 32 126 115; /* #207e73 */
+  --teal-9: 18 165 148; /* #12a594 */
+  --teal-10: 14 179 158; /* #0eb39e */
+  --teal-11: 11 216 182; /* #0bd8b6 */
+  --teal-12: 173 240 221; /* #adf0dd */
+
+  /* redDark - @radix-ui/colors@3.0.0 red-dark.css */
+  --red-1: 25 17 17; /* #191111 */
+  --red-2: 32 19 20; /* #201314 */
+  --red-3: 59 18 25; /* #3b1219 */
+  --red-4: 80 15 28; /* #500f1c */
+  --red-5: 97 22 35; /* #611623 */
+  --red-6: 114 35 45; /* #72232d */
+  --red-7: 140 51 58; /* #8c333a */
+  --red-8: 181 69 72; /* #b54548 */
+  --red-9: 229 72 77; /* #e5484d */
+  --red-10: 236 93 94; /* #ec5d5e */
+  --red-11: 255 149 146; /* #ff9592 */
+  --red-12: 255 209 217; /* #ffd1d9 */
+
+  /* grassDark - @radix-ui/colors@3.0.0 grass-dark.css */
+  --grass-1: 14 21 17; /* #0e1511 */
+  --grass-2: 20 26 21; /* #141a15 */
+  --grass-3: 27 42 30; /* #1b2a1e */
+  --grass-4: 29 58 36; /* #1d3a24 */
+  --grass-5: 37 72 45; /* #25482d */
+  --grass-6: 45 87 54; /* #2d5736 */
+  --grass-7: 54 103 64; /* #366740 */
+  --grass-8: 62 121 73; /* #3e7949 */
+  --grass-9: 70 167 88; /* #46a758 */
+  --grass-10: 83 179 101; /* #53b365 */
+  --grass-11: 113 208 131; /* #71d083 */
+  --grass-12: 194 240 194; /* #c2f0c2 */
+
+  /* amberDark - @radix-ui/colors@3.0.0 amber-dark.css */
+  --amber-1: 22 18 12; /* #16120c */
+  --amber-2: 29 24 15; /* #1d180f */
+  --amber-3: 48 32 8; /* #302008 */
+  --amber-4: 63 39 0; /* #3f2700 */
+  --amber-5: 77 48 0; /* #4d3000 */
+  --amber-6: 92 61 5; /* #5c3d05 */
+  --amber-7: 113 79 25; /* #714f19 */
+  --amber-8: 143 100 36; /* #8f6424 */
+  --amber-9: 255 197 61; /* #ffc53d */
+  --amber-10: 255 214 10; /* #ffd60a */
+  --amber-11: 255 202 22; /* #ffca16 */
+  --amber-12: 255 231 179; /* #ffe7b3 */
+
+  /* blueDark - @radix-ui/colors@3.0.0 blue-dark.css */
+  --blue-1: 13 21 32; /* #0d1520 */
+  --blue-2: 17 25 39; /* #111927 */
+  --blue-3: 13 40 71; /* #0d2847 */
+  --blue-4: 0 51 98; /* #003362 */
+  --blue-5: 0 64 116; /* #004074 */
+  --blue-6: 16 77 135; /* #104d87 */
+  --blue-7: 32 93 158; /* #205d9e */
+  --blue-8: 40 112 189; /* #2870bd */
+  --blue-9: 0 144 255; /* #0090ff */
+  --blue-10: 59 158 255; /* #3b9eff */
+  --blue-11: 112 184 255; /* #70b8ff */
+  --blue-12: 194 230 255; /* #c2e6ff */
+
+  /* yellowDark - @radix-ui/colors@3.0.0 yellow-dark.css */
+  --yellow-1: 20 18 11; /* #14120b */
+  --yellow-2: 27 24 15; /* #1b180f */
+  --yellow-3: 45 35 5; /* #2d2305 */
+  --yellow-4: 54 43 0; /* #362b00 */
+  --yellow-5: 67 53 0; /* #433500 */
+  --yellow-6: 82 66 2; /* #524202 */
+  --yellow-7: 102 84 23; /* #665417 */
+  --yellow-8: 131 106 33; /* #836a21 */
+  --yellow-9: 255 230 41; /* #ffe629 */
+  --yellow-10: 255 255 87; /* #ffff57 */
+  --yellow-11: 245 225 71; /* #f5e147 */
+  --yellow-12: 246 238 180; /* #f6eeb4 */
+
+  /* purpleDark - @radix-ui/colors@3.0.0 purple-dark.css */
+  --purple-1: 24 17 27; /* #18111b */
+  --purple-2: 30 21 35; /* #1e1523 */
+  --purple-3: 48 28 59; /* #301c3b */
+  --purple-4: 61 34 78; /* #3d224e */
+  --purple-5: 72 41 92; /* #48295c */
+  --purple-6: 84 52 107; /* #54346b */
+  --purple-7: 102 66 130; /* #664282 */
+  --purple-8: 132 87 170; /* #8457aa */
+  --purple-9: 142 78 198; /* #8e4ec6 */
+  --purple-10: 154 92 208; /* #9a5cd0 */
+  --purple-11: 209 157 255; /* #d19dff */
+  --purple-12: 236 217 250; /* #ecd9fa */
+
+  /* orangeDark - @radix-ui/colors@3.0.0 orange-dark.css */
+  --orange-1: 23 18 14; /* #17120e */
+  --orange-2: 30 22 15; /* #1e160f */
+  --orange-3: 51 30 11; /* #331e0b */
+  --orange-4: 70 33 0; /* #462100 */
+  --orange-5: 86 40 0; /* #562800 */
+  --orange-6: 102 53 12; /* #66350c */
+  --orange-7: 126 69 29; /* #7e451d */
+  --orange-8: 163 88 41; /* #a35829 */
+  --orange-9: 247 107 21; /* #f76b15 */
+  --orange-10: 255 128 31; /* #ff801f */
+  --orange-11: 255 160 87; /* #ffa057 */
+  --orange-12: 255 224 194; /* #ffe0c2 */
+
+  /* pinkDark - @radix-ui/colors@3.0.0 pink-dark.css */
+  --pink-1: 25 17 23; /* #191117 */
+  --pink-2: 33 18 29; /* #21121d */
+  --pink-3: 55 23 47; /* #37172f */
+  --pink-4: 75 20 61; /* #4b143d */
+  --pink-5: 89 28 71; /* #591c47 */
+  --pink-6: 105 41 85; /* #692955 */
+  --pink-7: 131 56 105; /* #833869 */
+  --pink-8: 168 72 133; /* #a84885 */
+  --pink-9: 214 64 159; /* #d6409f */
+  --pink-10: 222 81 168; /* #de51a8 */
+  --pink-11: 255 141 204; /* #ff8dcc */
+  --pink-12: 253 209 234; /* #fdd1ea */
+
+  /* ---- Semantic tokens that differ in dark (every other token resolves from :root) ---- */
+
+  /* Neutral backgrounds: cards are raised above the page, not lighter than it */
+  --bg-canvas: var(--sage-1);
+  --bg-surface: var(--sage-2);
+
+  /* Accent and status fills */
+  --bg-accent: var(--teal-9);
+  --bg-accent-hover: var(--teal-10);
+  --bg-danger: 206 44 49; /* #ce2c31 light red-11 */
+  --bg-success: 42 126 59; /* #2a7e3b light grass-11 */
+
+  /* Text */
+  --text-accent: var(--teal-11);
+  --text-danger: var(--red-11);
+  --text-success: var(--grass-11);
+  --text-warning: var(--amber-11);
+  --text-on-accent: var(--sage-1);
+  --text-on-warning: var(--sage-1);
+  --text-on-meter: var(--sage-1);
+
+  /* Borders and focus */
+  --border-input: var(--sage-9);
+  --ring-focus: var(--teal-9);
+
+  /* Answer-option tiles: mostly step 10 (option 3 keeps step 9; option 5 keeps the :root mix) */
+  --bg-option-1: var(--red-10);
+  --bg-option-2: var(--blue-10);
+  --bg-option-4: var(--grass-10);
+  --bg-option-6: var(--orange-10);
+  --bg-option-7: var(--pink-10);
+  --bg-option-8: var(--teal-10);
+}

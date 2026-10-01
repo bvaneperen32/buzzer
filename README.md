@@ -295,6 +295,14 @@ ADMIN_USERNAME=admin ADMIN_PASSWORD=changeme123 BASE_URL=http://localhost:8000 \
   python scripts/smoke_test_websocket.py
 ```
 
+### Theme check
+
+No stack needed. Checks the shared colour theme (`frontend/shared/theme/`): WCAG contrast for every allowed colour pair in light and dark, that every token name the Tailwind preset uses exists, and that no old palette class, focus-suppressing class or hex colour is left in the three apps. Exits 1 on any failure:
+
+```bash
+python scripts/check_theme.py
+```
+
 ### Simulate players
 
 `scripts/simulate_players.py` populates a live room with realistic fake players so you can test the full game loop without real students. It creates temporary local accounts via the Admin API, connects them over WebSocket, and has them answer automatically. All dependencies are already installed by `scripts/setup_venv.sh`.
@@ -560,14 +568,16 @@ buzzer/
 ├── frontend/
 │   ├── host/               React app — host/display screen  (typically port 5173 in dev)
 │   ├── player/             React app — player mobile browser (typically port 5174 in dev)
-│   └── admin/              React app — admin management UI   (typically port 5175 in dev)
+│   ├── admin/              React app — admin management UI   (typically port 5175 in dev)
+│   └── shared/theme/       Colour tokens, Tailwind preset and light/dark logic used by all three
 ├── nginx/
 │   └── nginx.dev.conf      Reverse-proxy config
 ├── mysql-init/             SQL scripts run by MySQL on first startup
 ├── scripts/
 │   ├── smoke_test_websocket.py   End-to-end WebSocket smoke test
 │   ├── simulate_players.py       Multi-profile async player simulator
-│   └── seed_demo.py              Seeds a demo course and game
+│   ├── seed_demo.py              Seeds a demo course and game
+│   └── check_theme.py            Contrast and leftover-colour check for the frontend theme
 ├── tests/
 │   ├── integration/        Pytest integration test suite
 │   ├── unit/               Pytest unit tests (no stack needed)

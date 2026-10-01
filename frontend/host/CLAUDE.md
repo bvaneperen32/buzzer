@@ -11,7 +11,9 @@ HOST.
 
 ## Contents
 
-- `index.html` — Vite entry document. Loads `/src/main.tsx` into `#root`.
+- `index.html` — Vite entry document. Loads `/src/main.tsx` into `#root`. An inline script in
+  `<head>` sets `<html data-theme>` before first paint: the choice stored under
+  `localStorage['buzzer-theme-host']`, else the OS preference. The key must match `ThemeToggle`'s.
 - `package.json` — React 18 + TypeScript + Vite. Runtime deps are deliberately few:
   `react-router-dom` (routing), `socket.io-client` (the live connection), `qrcode.react` (join
   QR), `lucide-react` (icons), and `clsx` + `tailwind-merge` (the `cn` helper). No state-management
@@ -19,7 +21,8 @@ HOST.
 - `vite.config.ts` — React plugin; `base` is `/host/` in production and `/` in dev; the dev server
   runs on **port 5173** and proxies `/api` and `/socket.io` (with `ws: true`) to
   `localhost:8000`.
-- `tailwind.config.ts`, `postcss.config.js` — styling config.
+- `tailwind.config.ts`, `postcss.config.js` — styling config. All colours come from the shared
+  preset (`../shared/theme/preset.js`); the config itself adds only the font stack.
 - `tsconfig.json`, `tsconfig.node.json` — TypeScript project references; `npm run build` runs
   `tsc -b` before `vite build`, so type errors fail the build.
 - [`src/`](src/CLAUDE.md) — the application itself. See that file for architecture and the
@@ -28,7 +31,8 @@ HOST.
 ## How it fits in
 
 One of three sibling apps under `frontend/` (`host`, `player`, `admin`), each independently built
-and served under its own path prefix. They share no code — the `Button`, `Card`, `cn`, and
+and served under its own path prefix. Apart from the colour theme in
+[`frontend/shared/`](../shared/CLAUDE.md), they share no code — the `Button`, `Card`, `cn`, and
 `api` helpers are duplicated per app rather than extracted into a shared package. Treat a fix in
 one as needing review in the other two.
 
@@ -63,10 +67,12 @@ just this one. The dev proxy assumes the backend is reachable at `localhost:8000
   server).
 - The dev proxy needs `ws: true` on `/socket.io` for the WebSocket upgrade. Without it, socket.io
   silently degrades to long-polling and the timing-sensitive parts of the game get much worse.
-- There is no test setup, no linter config, and no CI hook in this app — `tsc -b` during build is
-  the only automated check.
+- There is no test setup and no linter config in this app. CI runs only `tsc --noEmit`; `tsc -b`
+  during build is stricter, and `python scripts/check_theme.py` checks colours.
 - **UI primitives are copy-pasted across the three apps.** Divergence is the default here; if you
   change `Button` or `api.ts`, check whether `player` and `admin` need the same change.
-- This app assumes a wide landscape viewport and a dark background. `index.html` still declares
+- **Light and dark themes** (T9): the toggle is fixed top-right on every screen, projector
+  included. The theme is per browser, so the presenter picks what suits the room.
+- This app assumes a wide landscape viewport. `index.html` still declares
   the standard mobile viewport meta tag, but no screen here is designed for phone width — the
   game screens are projector-scale, the management pages desktop-dense.

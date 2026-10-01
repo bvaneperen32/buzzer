@@ -16,15 +16,18 @@ links open it in a new tab. Nothing here participates in a live game.
   `AdminLayout`: a fixed sidebar with `NavLink`s for Users, Courses, and Guests, then a muted
   "Host tools" section of plain new-tab anchors into the host app (Play, Games, Rosters,
   Sessions), then Logout, with an `<Outlet />` for the page. Unmatched paths redirect to `/users`,
-  as does `LoginPage` after sign-in.
-- `index.css` — Tailwind directives and the dark slate background.
+  as does `LoginPage` after sign-in. Renders `ThemeToggle` once, after the routes, so it appears on
+  every screen.
+- `index.css` — imports the shared `tokens.css` and `base.css` (page colours, global focus
+  outline), then the Tailwind directives. No colour values of its own.
 - **No `types/` directory** — unlike the host and player apps. Each page declares its own local
   interfaces (`Course`, `Game`, `UserItem`, …), so the same shape is redefined in several files.
 
 **Subdirectories** — each has its own `CLAUDE.md`:
 
 - [`pages/`](pages/CLAUDE.md) — the five CRUD screens.
-- [`components/`](components/CLAUDE.md) — `Button`, `Card`, `Input` (all copies of the host's).
+- [`components/`](components/CLAUDE.md) — `Button`, `Card`, `Input`, `ThemeToggle` (all copies of
+  the host's).
 - [`lib/`](lib/CLAUDE.md) — the REST client (with `ApiError`), the host-app link helper
   `hostAppUrl`, and `cn`.
 
@@ -84,6 +87,20 @@ JS-expression uses of the escape are fine, which is why it's easy to miss.
 Deleting a user removes their scores, and deleting a guest does the same — both behind native
 `confirm()` dialogs. Revoking a HOST row also removes that user's grants on the course's games
 (it warns first). Game delete moved to the host app (admins only, two-step inline confirm).
+
+### Styling
+
+- **Colours are shared theme tokens, light and dark** (T9; see
+  [frontend/shared/CLAUDE.md](../../shared/CLAUDE.md)). Use token classes (`bg-surface`,
+  `text-secondary`, `border-input`); palette classes and hex values no longer exist. Tables use
+  `bg-raised` header rows; checkboxes use `accent-primary`. No `focus:ring` or `outline-none`
+  classes: focus is one global outline.
+- `ThemeToggle` is fixed top-right (`z-40`) over every screen. `AdminLayout`'s `<main>` has top
+  padding so page headers clear it.
+- **The focus outline can be clipped by an `overflow-hidden` parent**, because it's drawn outside
+  the element. The likely case is `UserDetailPage`'s HOST/PLAYER role buttons in the course grant
+  panel, inside a `rounded overflow-hidden` container. Unconfirmed until the keyboard pass (see
+  `docs/ui/accessibility.md` §5). *Noted, not scheduled.*
 
 ### Development behavior
 

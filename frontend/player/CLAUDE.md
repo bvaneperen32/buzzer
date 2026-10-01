@@ -10,12 +10,15 @@ and rank. It can submit answers but never advances the game.
 
 - `index.html` — Vite entry document. Note the viewport tag: `maximum-scale=1.0,
   user-scalable=no`, which the host and admin apps don't set. Title is plain "Buzzer" (it's the
-  public-facing app).
+  public-facing app). An inline script in `<head>` sets `<html data-theme>` before first paint:
+  the choice stored under `localStorage['buzzer-theme-player']`, else the OS preference. The key
+  must match `ThemeToggle`'s.
 - `package.json` — React 18 + TypeScript + Vite. Same dependency set as the host app **minus
   `qrcode.react`** — players scan QR codes, they don't render them.
 - `vite.config.ts` — React plugin; `base` is `/player/` in production, `/` in dev; dev server on
   **port 5174**, proxying `/api` and `/socket.io` (with `ws: true`) to `localhost:8000`.
-- `tailwind.config.ts`, `postcss.config.js` — styling config.
+- `tailwind.config.ts`, `postcss.config.js` — styling config. All colours come from the shared
+  preset (`../shared/theme/preset.js`); the config itself adds only the font stack.
 - `tsconfig.json`, `tsconfig.node.json` — `npm run build` runs `tsc -b` first, so type errors fail
   the build.
 - [`src/`](src/CLAUDE.md) — the application. See that file for architecture and the
@@ -24,9 +27,10 @@ and rank. It can submit answers but never advances the game.
 ## How it fits in
 
 One of three sibling apps under `frontend/` (`host` on :5173, `player` on :5174, `admin` on
-:5175), each built independently and served under its own path prefix. They share no code —
-`Button`, `Card`, `Input`, `TimerBar`, `cn`, and `api.ts` are duplicated per app and have already
-diverged. A fix in one needs review in the other two.
+:5175), each built independently and served under its own path prefix. Apart from the colour
+theme in [`frontend/shared/`](../shared/CLAUDE.md), they share no code — `Button`, `Card`,
+`Input`, `TimerBar`, `cn`, and `api.ts` are duplicated per app and have already diverged. A fix in
+one needs review in the other two.
 
 This app pairs directly with the host: the host renders the QR that points here
 (`/player/join?code=XXXXXX`), displays the prompt this app deliberately omits, and drives every
@@ -65,7 +69,11 @@ phone on the same network can't resolve it without both dev servers listening on
   long-polling, which degrades answer-timing accuracy — the thing this app is most sensitive to.
 - `user-scalable=no` blocks pinch-zoom. Deliberate (prevents accidental zoom during fast tapping),
   but an accessibility trade-off worth knowing before anyone files it as a bug.
-- No tests, no lint config, no CI hook — `tsc -b` at build time is the only automated check.
+- No tests and no lint config. CI runs only `tsc --noEmit`; `tsc -b` at build time is stricter,
+  and `python scripts/check_theme.py` checks colours.
+- **Light and dark themes** (T9): the first visit follows the phone's OS setting; the toggle,
+  fixed top-right on every screen, overrides it. Screens whose content reaches the top-right
+  corner (the multiple-choice and multi-select timer rows) carry extra top padding to clear it.
 - This is the only app real end users touch, and the only one that accepts unauthenticated
   entry (guest join). Its error messages and failure states deserve more care than the host or
   admin equivalents.

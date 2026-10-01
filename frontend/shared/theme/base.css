@@ -1,0 +1,31 @@
+/*
+ * Global base rules shared by host, player and admin (imported right after tokens.css in each
+ * app's src/index.css). Colours come only from tokens.css.
+ */
+
+/* Native scrollbars, <select> popups and date pickers follow the theme. */
+:root {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background-color: rgb(var(--bg-canvas));
+  color: rgb(var(--text-primary));
+}
+
+/*
+ * The one focus indicator for every focusable element (WCAG 2.4.7, 1.4.11); components carry no
+ * focus classes of their own. The 2px offset shows the background the element sits on between it
+ * and the outline, which is what the ring-focus contrast pairs measure. "html :focus-visible"
+ * (specificity 0,1,1) outranks preflight's Firefox :-moz-focusring rule, which the build emits
+ * after this file because @imports must come first in index.css.
+ */
+html :focus-visible {
+  outline: 2px solid rgb(var(--ring-focus));
+  outline-offset: 2px;
+}

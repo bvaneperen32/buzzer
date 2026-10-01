@@ -50,8 +50,15 @@ class-name merger. There is no socket helper here — the socket lives directly 
 - `sortResults.ts` (T7) — the one TypeScript port of `sort_it.results_breakdown`, used by both
   `ResultsPage` and `GameOverPage`: integer half-up percentages (never `Math.round`), the most
   common wrong box (ties to the lowest index), "—" with no answers.
-- `canvasColors.ts` (T7) — the Spot It canvases' colours (the viridis heat ramp at 55%, grid lines,
-  Correct outlines), in one place for T9's theming.
+- `canvasColors.ts` (T7, themed by T9 §4.12) — the Spot It canvas's colours, read from the theme's
+  tokens. `canvasColors()` returns every colour the canvas draws with; call it **at draw time**,
+  never at module load, because the theme can change after load. `token(name, alpha)` returns
+  `rgb(<channels> / <alpha>)` and **throws on an unknown name**: an empty value would leave the
+  canvas silently drawing in its previous colour. Colours over the image (grid lines, the viridis
+  heat ramp at `HEAT_OPACITY`, counts, Correct outlines, the editor's accepted cells and cursor)
+  are fixed tokens (`--canvas-ink`, `--canvas-paper`, `--heat-1` … `--heat-5`,
+  `--canvas-accepted`, `--canvas-cursor`); the grid area and labels follow the theme. Only the
+  alphas are numbers here.
 - `format.ts` — byte counts and limits in KiB/MiB for the image UI.
 
 ## How it fits in

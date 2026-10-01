@@ -5,6 +5,7 @@ import { api, ApiError } from './lib/api';
 import { hostAppUrl } from './lib/hostApp';
 import { Button } from './components/ui/button';
 import { Card, CardContent, CardHeader } from './components/ui/card';
+import { ThemeToggle } from './components/ui/ThemeToggle';
 import LoginPage from './pages/LoginPage';
 import CoursesPage from './pages/CoursesPage';
 import UsersPage from './pages/UsersPage';
@@ -57,8 +58,8 @@ function RequireAdmin() {
       <div className="min-h-screen flex items-center justify-center p-4">
         <Card className="w-full max-w-md">
           <CardHeader>
-            <h1 className="text-lg font-semibold text-slate-100">Couldn't load your account.</h1>
-            <p className="text-red-400 text-sm mt-1">{error}</p>
+            <h1 className="text-lg font-semibold text-primary">Couldn't load your account.</h1>
+            <p className="text-danger text-sm mt-1">{error}</p>
           </CardHeader>
           <CardContent>
             <Button onClick={() => void load()}>Retry</Button>
@@ -71,7 +72,7 @@ function RequireAdmin() {
   if (!me) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <Loader2 size={24} className="animate-spin text-slate-400" />
+        <Loader2 size={24} className="animate-spin text-secondary" />
       </div>
     );
   }
@@ -81,12 +82,12 @@ function RequireAdmin() {
       <div className="min-h-screen flex items-center justify-center p-4">
         <Card className="w-full max-w-md">
           <CardHeader>
-            <p className="text-slate-100">This console is for administrators.</p>
+            <p className="text-primary">This console is for administrators.</p>
           </CardHeader>
           <CardContent className="flex gap-3">
             <a
               href={hostAppUrl('/home')}
-              className="inline-flex items-center justify-center rounded-lg font-semibold transition-colors px-4 py-2 text-base bg-indigo-600 text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900 focus:ring-indigo-500"
+              className="inline-flex items-center justify-center rounded-lg font-semibold transition-colors px-4 py-2 text-base bg-accent text-on-accent hover:bg-accent-hover"
             >
               Open Buzzer Host
             </a>
@@ -111,8 +112,8 @@ function AdminLayout() {
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
       isActive
-        ? 'bg-indigo-600 text-white'
-        : 'text-slate-300 hover:bg-slate-700 hover:text-slate-100'
+        ? 'bg-selected text-primary'
+        : 'text-secondary hover:bg-hover hover:text-primary'
     }`;
 
   // Host work (games, questions, rosters, session downloads) lives in the host app. These open
@@ -127,9 +128,9 @@ function AdminLayout() {
   return (
     <div className="flex min-h-screen">
       {/* Sidebar — sticky and viewport-high so Logout stays in view however long the page is */}
-      <aside className="w-56 shrink-0 sticky top-0 h-screen bg-slate-900 border-r border-slate-700 flex flex-col">
-        <div className="px-6 py-5 border-b border-slate-700">
-          <h1 className="text-lg font-bold text-white">Buzzer Admin</h1>
+      <aside className="w-56 shrink-0 sticky top-0 h-screen bg-surface border-r border-subtle flex flex-col">
+        <div className="px-6 py-5 border-b border-subtle">
+          <h1 className="text-lg font-bold text-primary">Buzzer Admin</h1>
         </div>
         <nav className="flex-1 overflow-y-auto p-3 space-y-1">
           <NavLink to="/users" className={linkClass}>
@@ -142,15 +143,15 @@ function AdminLayout() {
             <UserX size={16} /> Guests
           </NavLink>
 
-          <div className="pt-3 mt-3 border-t border-slate-700">
-            <p className="px-4 pb-1 text-xs font-medium uppercase tracking-wider text-slate-500">Host tools</p>
+          <div className="pt-3 mt-3 border-t border-subtle">
+            <p className="px-4 pb-1 text-xs font-medium uppercase tracking-wider text-secondary">Host tools</p>
             {hostTools.map(({ label, path }) => (
               <a
                 key={path}
                 href={hostAppUrl(path)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center justify-between px-4 py-2 rounded-lg text-xs text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition-colors"
+                className="flex items-center justify-between px-4 py-2 rounded-lg text-xs text-secondary hover:bg-hover hover:text-primary transition-colors"
               >
                 <span>{label}</span>
                 <ExternalLink size={12} />
@@ -158,10 +159,10 @@ function AdminLayout() {
             ))}
           </div>
         </nav>
-        <div className="p-3 border-t border-slate-700">
+        <div className="p-3 border-t border-subtle">
           <button
             onClick={logout}
-            className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-700 hover:text-slate-100 w-full transition-colors"
+            className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-secondary hover:bg-hover hover:text-primary w-full transition-colors"
           >
             <LogOut size={16} /> Logout
           </button>
@@ -169,7 +170,7 @@ function AdminLayout() {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-auto">
+      <main className="flex-1 overflow-auto pt-6">
         <Outlet />
       </main>
     </div>
@@ -192,6 +193,8 @@ export default function App() {
         {/* Must agree with LoginPage's post-login redirect. */}
         <Route path="*" element={<Navigate to="/users" replace />} />
       </Routes>
+      {/* Outside the routes, so every screen has it (login and the notices too) */}
+      <ThemeToggle />
     </BrowserRouter>
   );
 }

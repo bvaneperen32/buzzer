@@ -86,11 +86,11 @@ export function ImagePicker({ label, value, images, onSelect, onUpload, refresh,
             compact
           />
         ) : value !== null ? (
-          <span className="text-amber-400 text-xs whitespace-nowrap" title={`Image ${value} isn't in this game's library`}>
+          <span className="text-warning text-xs whitespace-nowrap" title={`Image ${value} isn't in this game's library`}>
             Missing image
           </span>
         ) : (
-          !compact && <span className="text-slate-500 text-xs">No image</span>
+          !compact && <span className="text-secondary text-xs">No image</span>
         )}
         <Button
           type="button"
@@ -119,10 +119,10 @@ export function ImagePicker({ label, value, images, onSelect, onUpload, refresh,
       </div>
 
       {open && (
-        <div className="rounded-lg border border-slate-700 bg-slate-900/60 p-3 space-y-3">
-          <p className="text-xs text-slate-400">{label}: choose from this game's images</p>
+        <div className="rounded-lg border border-subtle bg-raised p-3 space-y-3">
+          <p className="text-xs text-secondary">{label}: choose from this game's images</p>
           {images.length === 0 ? (
-            <p className="text-xs text-slate-500">No images in this game's library yet — upload one below.</p>
+            <p className="text-xs text-secondary">No images in this game's library yet — upload one below.</p>
           ) : (
             <div className="grid grid-cols-6 gap-2">
               {images.map((img) => (
@@ -136,20 +136,20 @@ export function ImagePicker({ label, value, images, onSelect, onUpload, refresh,
                   title={img.description}
                   aria-label={`Use image: ${img.description}`}
                   aria-pressed={img.id === value}
-                  className={`rounded-lg p-0.5 ${img.id === value ? 'ring-2 ring-indigo-500' : 'hover:ring-2 hover:ring-slate-500'}`}
+                  className={`rounded-lg border-2 p-0.5 ${img.id === value ? 'border-accent' : 'border-transparent hover:border-strong'}`}
                 >
                   <SafeImage src={img.small_url} alt={img.description} className="aspect-square w-full" fit="cover" refresh={refresh} compact />
                 </button>
               ))}
             </div>
           )}
-          <div className="flex flex-wrap items-center gap-2 border-t border-slate-700 pt-3">
+          <div className="flex flex-wrap items-center gap-2 border-t border-subtle pt-3">
             <input
               ref={fileRef}
               type="file"
               accept={ACCEPT}
               onChange={(e) => chooseFile(e.target.files?.[0] ?? null)}
-              className="text-xs text-slate-300 file:mr-2 file:rounded file:border-0 file:bg-slate-700 file:px-2 file:py-1 file:text-slate-200"
+              className="text-xs text-secondary file:mr-2 file:rounded file:border-0 file:bg-hover file:px-2 file:py-1 file:text-primary"
               aria-label="Image file to upload"
             />
             <Input
@@ -164,7 +164,7 @@ export function ImagePicker({ label, value, images, onSelect, onUpload, refresh,
               {uploading ? 'Uploading…' : 'Upload & use'}
             </Button>
           </div>
-          {error && <p className="text-red-400 text-xs">{error}</p>}
+          {error && <p className="text-danger text-xs">{error}</p>}
         </div>
       )}
     </div>

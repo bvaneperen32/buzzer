@@ -42,19 +42,20 @@ export function TimerBar({ totalSeconds, initialSeconds, paused = false }: Timer
   const displaySeconds = Math.ceil(timeLeft);
 
   const barColor =
-    fraction > 0.6 ? 'bg-green-500' :
-    fraction > 0.3 ? 'bg-yellow-400' :
-    'bg-red-500';
+    fraction > 0.6 ? 'bg-meter-success' :
+    fraction > 0.3 ? 'bg-meter-warning' :
+    'bg-meter-danger';
 
   return (
     <div className="w-full flex items-center gap-4">
-      <div className="flex-1 h-6 bg-slate-700 rounded-full overflow-hidden">
+      <div className="flex-1 h-6 bg-meter-track rounded-full overflow-hidden">
         <div
           className={`h-full rounded-full transition-[width] duration-100 ease-linear ${barColor}`}
           style={{ width: `${fraction * 100}%` }}
         />
       </div>
-      <span className="text-slate-300 font-mono text-lg font-semibold w-12 text-right tabular-nums shrink-0">
+      {/* The seconds are the primary cue; the bar colour only reinforces them (WCAG 1.4.1). */}
+      <span className="text-primary font-mono text-lg font-semibold w-12 text-right tabular-nums shrink-0">
         {displaySeconds}s
       </span>
     </div>

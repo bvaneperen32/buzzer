@@ -73,8 +73,8 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center p-4">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <h1 className="text-2xl font-bold text-slate-100">Buzzer</h1>
-          <p className="text-slate-400 text-sm mt-1">Host Sign In</p>
+          <h1 className="text-2xl font-bold text-primary">Buzzer</h1>
+          <p className="text-secondary text-sm mt-1">Host Sign In</p>
         </CardHeader>
         <CardContent className="space-y-4">
           {/* Primary: UW NetID SSO */}
@@ -82,17 +82,17 @@ export default function LoginPage() {
             href="/api/auth/oauth2-callback?redirect_to=/host/login"
             className={`flex items-center justify-center w-full py-2.5 px-4 rounded-lg font-medium transition-colors
               ${loading
-                ? 'bg-slate-700 text-slate-500 pointer-events-none'
-                : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                ? 'bg-raised text-disabled pointer-events-none'
+                : 'bg-accent hover:bg-accent-hover text-on-accent'
               }`}
           >
             Sign in with UW NetID
           </a>
 
           <div className="flex items-center gap-3">
-            <div className="flex-1 h-px bg-slate-700" />
-            <span className="text-slate-500 text-xs">or local account</span>
-            <div className="flex-1 h-px bg-slate-700" />
+            <div className="flex-1 border-t border-subtle" />
+            <span className="text-secondary text-xs">or local account</span>
+            <div className="flex-1 border-t border-subtle" />
           </div>
 
           {/* Secondary: username/password for admin & local accounts */}
@@ -113,7 +113,7 @@ export default function LoginPage() {
               autoComplete="current-password"
               required
             />
-            {error && <p className="text-red-400 text-sm">{error}</p>}
+            {error && <p className="text-danger text-sm">{error}</p>}
             <Button type="submit" variant="outline" className="w-full" disabled={loading}>
               {loading ? 'Signing in…' : 'Sign In'}
             </Button>

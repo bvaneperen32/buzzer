@@ -484,7 +484,7 @@ function formProblems(form: FormState, images: ImageItem[]): string[] {
 type Payload = ReturnType<typeof formToPayload>;
 
 const selectClass =
-  'w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 text-sm';
+  'w-full rounded-lg border border-input bg-raised px-3 py-2 text-primary focus-visible:border-accent text-sm';
 
 function QuestionForm({
   initial,
@@ -680,7 +680,7 @@ function QuestionForm({
       {/* Type + grading */}
       <div className="flex gap-3">
         <div className="flex-1">
-          <label className="block text-xs text-slate-400 mb-1">Question type</label>
+          <label className="block text-xs text-secondary mb-1">Question type</label>
           <select
             className={selectClass}
             value={form.type}
@@ -695,7 +695,7 @@ function QuestionForm({
           </select>
         </div>
         <div className="flex-1">
-          <label className="block text-xs text-slate-400 mb-1">Grading</label>
+          <label className="block text-xs text-secondary mb-1">Grading</label>
           <select
             className={selectClass}
             value={form.grading}
@@ -709,9 +709,9 @@ function QuestionForm({
 
       {/* Prompt */}
       <div>
-        <label className="block text-xs text-slate-400 mb-1">Prompt</label>
+        <label className="block text-xs text-secondary mb-1">Prompt</label>
         <textarea
-          className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none text-sm"
+          className="w-full rounded-lg border border-input bg-raised px-3 py-2 text-primary placeholder:text-secondary focus-visible:border-accent resize-none text-sm"
           rows={3}
           placeholder="Question text…"
           value={form.prompt}
@@ -728,7 +728,7 @@ function QuestionForm({
               onUpload={onUpload}
               refresh={refreshImages}
             />
-            <p className="text-slate-500 text-xs mt-1">
+            <p className="text-secondary text-xs mt-1">
               Shown on the projector below the prompt; phones never show it.
             </p>
           </div>
@@ -738,11 +738,11 @@ function QuestionForm({
       {/* Type-specific */}
       {form.type === 'multiple_choice' && (
         <div>
-          <label className="block text-xs text-slate-400 mb-2">Options</label>
+          <label className="block text-xs text-secondary mb-2">Options</label>
           {form.grading === 'ACCURACY' && (
             <div className="flex gap-2 mb-1 px-0.5">
-              <span className="flex-1 text-xs text-slate-500">Answer text</span>
-              <span className="w-24 text-xs text-slate-500">Points</span>
+              <span className="flex-1 text-xs text-secondary">Answer text</span>
+              <span className="w-24 text-xs text-secondary">Points</span>
               {form.mcOptions.length > 2 && <span className="w-7" />}
             </div>
           )}
@@ -801,11 +801,11 @@ function QuestionForm({
 
       {form.type === 'multi_select' && (
         <div>
-          <label className="block text-xs text-slate-400 mb-2">Options</label>
+          <label className="block text-xs text-secondary mb-2">Options</label>
           {form.grading === 'ACCURACY' && (
             <div className="flex gap-2 mb-1 px-0.5">
-              <span className="flex-1 text-xs text-slate-500">Answer text</span>
-              <span className="w-24 text-xs text-slate-500">Points (neg = penalty)</span>
+              <span className="flex-1 text-xs text-secondary">Answer text</span>
+              <span className="w-24 text-xs text-secondary">Points (neg = penalty)</span>
               {form.msOptions.length > 2 && <span className="w-7" />}
             </div>
           )}
@@ -859,7 +859,7 @@ function QuestionForm({
             </Button>
           </div>
           {form.grading === 'ACCURACY' && (
-            <p className="text-slate-500 text-xs mt-1">
+            <p className="text-secondary text-xs mt-1">
               Correct options: positive pts. Distractors: negative pts (penalty). Score = sum of selected, capped at 0.
             </p>
           )}
@@ -868,10 +868,10 @@ function QuestionForm({
 
       {form.type === 'true_false' && form.grading === 'ACCURACY' && (
         <div>
-          <label className="block text-xs text-slate-400 mb-2">Points per answer</label>
+          <label className="block text-xs text-secondary mb-2">Points per answer</label>
           <div className="flex gap-4">
             <div>
-              <span className="text-slate-300 text-sm">True:</span>
+              <span className="text-secondary text-sm">True:</span>
               <Input
                 type="number"
                 value={form.tfTruePoints}
@@ -882,7 +882,7 @@ function QuestionForm({
               />
             </div>
             <div>
-              <span className="text-slate-300 text-sm">False:</span>
+              <span className="text-secondary text-sm">False:</span>
               <Input
                 type="number"
                 value={form.tfFalsePoints}
@@ -899,10 +899,10 @@ function QuestionForm({
       {form.type === 'fill_in_the_blank' && form.grading === 'ACCURACY' && (
         <div className="space-y-3">
           <div>
-            <label className="block text-xs text-slate-400 mb-2">Accepted answers</label>
+            <label className="block text-xs text-secondary mb-2">Accepted answers</label>
             <div className="flex gap-2 mb-1 px-0.5">
-              <span className="flex-1 text-xs text-slate-500">Answer text</span>
-              <span className="w-24 text-xs text-slate-500">Points</span>
+              <span className="flex-1 text-xs text-secondary">Answer text</span>
+              <span className="w-24 text-xs text-secondary">Points</span>
               {form.fibAnswers.length > 1 && <span className="w-7" />}
             </div>
             <div className="space-y-2">
@@ -954,7 +954,7 @@ function QuestionForm({
             </div>
           </div>
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Edit distance tolerance (fuzzy match)</label>
+            <label className="block text-xs text-secondary mb-1">Edit distance tolerance (fuzzy match)</label>
             <Input
               type="number"
               value={form.fibEditDistance}
@@ -969,7 +969,7 @@ function QuestionForm({
       {form.type === 'sort_into_boxes' && (
         <div className="space-y-4">
           <div>
-            <label className="block text-xs text-slate-400 mb-2">
+            <label className="block text-xs text-secondary mb-2">
               Boxes ({SORT_BOXES.min}–{SORT_BOXES.max}, up to {SORT_BOXES.maxLength} characters)
             </label>
             <div className="space-y-2">
@@ -1003,9 +1003,10 @@ function QuestionForm({
           </div>
 
           {form.grading === 'COMPLETENESS' && (
-            <label className="flex items-center gap-2 text-sm text-slate-300">
+            <label className="flex items-center gap-2 text-sm text-secondary">
               <input
                 type="checkbox"
+                className="rounded border-input bg-raised accent-primary"
                 checked={form.sortKeyOn}
                 onChange={(e) => set('sortKeyOn', e.target.checked)}
               />
@@ -1014,7 +1015,7 @@ function QuestionForm({
           )}
 
           <div>
-            <label className="block text-xs text-slate-400 mb-2">
+            <label className="block text-xs text-secondary mb-2">
               Cards ({SORT_CARDS.min}–{SORT_CARDS.max}, up to {SORT_CARDS.maxLength} characters)
               {(form.grading === 'ACCURACY' || form.sortKeyOn) && ' and each card’s correct box'}
             </label>
@@ -1030,7 +1031,7 @@ function QuestionForm({
                   />
                   {(form.grading === 'ACCURACY' || form.sortKeyOn) && (
                     <select
-                      className="w-44 rounded-lg border border-slate-600 bg-slate-800 px-2 py-2 text-slate-100 text-sm"
+                      className="w-44 rounded-lg border border-input bg-raised px-2 py-2 text-primary focus-visible:border-accent text-sm"
                       value={form.sortKey[i] === null || form.sortKey[i] === undefined ? '' : String(form.sortKey[i])}
                       onChange={(e) => assign(i, e.target.value === '' ? null : Number(e.target.value))}
                       aria-label={`Card ${i + 1} correct box`}
@@ -1058,7 +1059,7 @@ function QuestionForm({
             </div>
           </div>
           {form.grading === 'ACCURACY' && (
-            <p className="text-slate-500 text-xs">
+            <p className="text-secondary text-xs">
               Scoring per card: right +1, wrong −1/(boxes − 1), left out 0; the question never scores
               below 0. Players see the cards in a shuffled order.
             </p>
@@ -1093,7 +1094,7 @@ function QuestionForm({
       {/* Time + points */}
       <div className="flex gap-4">
         <div>
-          <label className="block text-xs text-slate-400 mb-1">Time limit (seconds)</label>
+          <label className="block text-xs text-secondary mb-1">Time limit (seconds)</label>
           <Input
             type="number"
             value={form.timeLimitSeconds}
@@ -1105,7 +1106,7 @@ function QuestionForm({
         </div>
         {(form.grading === 'COMPLETENESS' || isT7) && (
           <div>
-            <label className="block text-xs text-slate-400 mb-1">
+            <label className="block text-xs text-secondary mb-1">
               {isT7 && form.grading === 'ACCURACY' ? 'Points (for a fully correct answer)' : 'Points value'}
             </label>
             <Input
@@ -1123,14 +1124,14 @@ function QuestionForm({
       </div>
 
       {isT7 && problems.length > 0 && (
-        <ul className="list-disc pl-5 text-amber-300 text-xs space-y-0.5" aria-live="polite">
+        <ul className="list-disc pl-5 text-warning text-xs space-y-0.5" aria-live="polite">
           {problems.map((problem) => (
             <li key={problem}>{problem}</li>
           ))}
         </ul>
       )}
       {saveError && (
-        <p className="text-red-400 text-sm" role="alert">
+        <p className="text-danger text-sm" role="alert">
           {saveError}
         </p>
       )}
@@ -1198,7 +1199,7 @@ function SpotItEditor({
           onUpload={onUpload}
           refresh={refreshImages}
         />
-        <p className="text-slate-500 text-xs mt-1">
+        <p className="text-secondary text-xs mt-1">
           The projector shows this image under a labelled grid; players pick the matching cell on
           their phones, which show only the grid — never the image. Spot It is visual-only: it
           needs players who can see the projector.
@@ -1206,14 +1207,14 @@ function SpotItEditor({
       </div>
 
       {question?.needs_review && (
-        <p className="rounded-lg border border-amber-600/60 bg-amber-900/20 px-3 py-2 text-xs text-amber-200">
+        <p className="rounded-lg border border-warning bg-warning-subtle px-3 py-2 text-xs text-warning">
           Needs review — {reviewText(question.review_reasons ?? [], readGrid(question.config['grid']), spotImage)}
         </p>
       )}
 
       <div className="flex flex-wrap items-end gap-3">
         <div>
-          <label className="block text-xs text-slate-400 mb-1">Columns</label>
+          <label className="block text-xs text-secondary mb-1">Columns</label>
           <Input
             type="number"
             value={form.spotGrid?.cols || ''}
@@ -1226,7 +1227,7 @@ function SpotItEditor({
           />
         </div>
         <div>
-          <label className="block text-xs text-slate-400 mb-1">Rows</label>
+          <label className="block text-xs text-secondary mb-1">Rows</label>
           <Input
             type="number"
             value={form.spotGrid?.rows || ''}
@@ -1239,7 +1240,7 @@ function SpotItEditor({
           />
         </div>
         {spotImage && limits && (
-          <p className="text-xs text-slate-400" data-spot-limits={`${limits.cols}x${limits.rows}`}>
+          <p className="text-xs text-secondary" data-spot-limits={`${limits.cols}x${limits.rows}`}>
             {fitsNoGrid(width, height)
               ? `This image ${tooDenseText({ cols: 2, rows: 2 }, width, height).replace(/^its image /, '')}; drafts still save, unconfirmed.`
               : `Up to ${limits.cols}×${limits.rows} for this image.`}
@@ -1264,14 +1265,14 @@ function SpotItEditor({
       )}
 
       {grid && (
-        <p className="text-xs text-slate-400">
+        <p className="text-xs text-secondary">
           {form.spotCells.length} of max {half} accepted cells
           {form.spotCells.length > 0 && `: ${sortCells(form.spotCells).map(cellLabel).join(', ')}`}
           {form.grading === 'COMPLETENESS' && ' (optional, not scored)'}
         </p>
       )}
       {outside.length > 0 && (
-        <div className="flex items-center gap-2 text-xs text-amber-300">
+        <div className="flex items-center gap-2 text-xs text-warning">
           <span>Outside the grid: {outside.map(cellLabel).join(', ')}</span>
           <Button type="button" size="sm" variant="outline" onClick={removeOutside}>
             Remove them
@@ -1279,10 +1280,10 @@ function SpotItEditor({
         </div>
       )}
 
-      <label className={`flex items-start gap-2 text-sm ${fits ? 'text-slate-200' : 'text-slate-500'}`}>
+      <label className={`flex items-start gap-2 text-sm ${fits ? 'text-primary' : 'text-disabled'}`}>
         <input
           type="checkbox"
-          className="mt-1"
+          className="mt-1 rounded border-input bg-raised accent-primary"
           checked={form.spotStamp !== 'none'}
           disabled={!fits || outside.length > 0}
           onChange={(e) => setConfirmed(e.target.checked)}
@@ -1290,7 +1291,7 @@ function SpotItEditor({
         <span>
           Accepted cells checked against this image and grid
           {spotImage && grid && !fits && limits && !fitsNoGrid(width, height) && (
-            <span className="block text-xs text-amber-300">
+            <span className="block text-xs text-warning">
               This image allows up to {limits.cols}×{limits.rows}; the draft still saves unconfirmed.
             </span>
           )}
@@ -1312,7 +1313,7 @@ function ListThumb({ id, images, size, refresh }: {
   if (id === null) return null;
   const image = images.get(id);
   if (!image) {
-    return <span className="text-amber-400 text-xs whitespace-nowrap">Missing image</span>;
+    return <span className="text-warning text-xs whitespace-nowrap">Missing image</span>;
   }
   return (
     <SafeImage
@@ -1448,7 +1449,7 @@ export default function QuestionEditorPage() {
     find_in_image: 'Spot It',
   };
 
-  if (loading) return <div className="p-8 text-slate-400">Loading…</div>;
+  if (loading) return <div className="p-8 text-secondary">Loading…</div>;
 
   return (
     <div className="p-8 max-w-4xl space-y-6">
@@ -1456,12 +1457,12 @@ export default function QuestionEditorPage() {
         <div>
           <button
             onClick={() => navigate('/games')}
-            className="flex items-center gap-2 text-slate-400 hover:text-slate-100 text-sm mb-2"
+            className="flex items-center gap-2 text-secondary hover:text-primary text-sm mb-2"
           >
             <ArrowLeft size={14} /> Back to Games
           </button>
-          <h2 className="text-2xl font-bold text-slate-100">{game?.title}</h2>
-          <p className="text-slate-400 text-sm mt-0.5">{questions.length} question{questions.length !== 1 ? 's' : ''}</p>
+          <h2 className="text-2xl font-bold text-primary">{game?.title}</h2>
+          <p className="text-secondary text-sm mt-0.5">{questions.length} question{questions.length !== 1 ? 's' : ''}</p>
         </div>
         <div className="flex gap-2">
           <Button
@@ -1479,7 +1480,7 @@ export default function QuestionEditorPage() {
         </div>
       </div>
 
-      {error && <p className="text-red-400 text-sm">{error}</p>}
+      {error && <p className="text-danger text-sm">{error}</p>}
 
       <ImageLibraryPanel
         library={imageLibrary.library}
@@ -1495,7 +1496,7 @@ export default function QuestionEditorPage() {
       {/* Add question form */}
       {showAddForm && (
         <Card>
-          <CardHeader><h3 className="font-semibold text-slate-100">New Question</h3></CardHeader>
+          <CardHeader><h3 className="font-semibold text-primary">New Question</h3></CardHeader>
           <CardContent>
             <QuestionForm
               initial={defaultForm()}
@@ -1513,7 +1514,7 @@ export default function QuestionEditorPage() {
 
       {/* Question list */}
       {questions.length === 0 && !showAddForm && (
-        <p className="text-slate-400">No questions yet. Add one above.</p>
+        <p className="text-secondary">No questions yet. Add one above.</p>
       )}
 
       <div className="space-y-4">
@@ -1522,7 +1523,7 @@ export default function QuestionEditorPage() {
             {editingId === q.id ? (
               <>
                 <CardHeader>
-                  <h3 className="font-semibold text-slate-100">Edit Question {i + 1}</h3>
+                  <h3 className="font-semibold text-primary">Edit Question {i + 1}</h3>
                 </CardHeader>
                 <CardContent>
                   <QuestionForm
@@ -1545,14 +1546,14 @@ export default function QuestionEditorPage() {
                   <button
                     onClick={() => void moveQuestion(i, -1)}
                     disabled={i === 0}
-                    className="text-slate-500 hover:text-slate-200 disabled:opacity-20"
+                    className="text-secondary hover:text-primary disabled:opacity-20"
                   >
                     <ChevronUp size={16} />
                   </button>
                   <button
                     onClick={() => void moveQuestion(i, 1)}
                     disabled={i === questions.length - 1}
-                    className="text-slate-500 hover:text-slate-200 disabled:opacity-20"
+                    className="text-secondary hover:text-primary disabled:opacity-20"
                   >
                     <ChevronDown size={16} />
                   </button>
@@ -1560,26 +1561,26 @@ export default function QuestionEditorPage() {
 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
-                    <span className="text-slate-500 text-xs font-mono">Q{i + 1}</span>
-                    <span className="px-1.5 py-0.5 rounded text-xs bg-slate-700 text-slate-300">
+                    <span className="text-secondary text-xs font-mono">Q{i + 1}</span>
+                    <span className="px-1.5 py-0.5 rounded text-xs bg-raised text-secondary">
                       {typeLabel[q.type] ?? q.type}
                     </span>
-                    <span className="px-1.5 py-0.5 rounded text-xs bg-slate-700 text-slate-300">
+                    <span className="px-1.5 py-0.5 rounded text-xs bg-raised text-secondary">
                       {q.grading_type}
                     </span>
-                    <span className="text-slate-500 text-xs">{q.time_limit_seconds}s · {q.points_value}pts</span>
+                    <span className="text-secondary text-xs">{q.time_limit_seconds}s · {q.points_value}pts</span>
                     {q.needs_review && (
                       <span
-                        className="px-1.5 py-0.5 rounded text-xs bg-amber-900/60 text-amber-200 font-semibold"
+                        className="px-1.5 py-0.5 rounded text-xs bg-warning-subtle text-warning font-semibold"
                         data-needs-review="true"
                       >
                         Needs review
                       </span>
                     )}
                   </div>
-                  <p className="text-slate-100 text-sm leading-relaxed">{q.prompt}</p>
+                  <p className="text-primary text-sm leading-relaxed">{q.prompt}</p>
                   {q.needs_review && (
-                    <p className="mt-1 text-amber-300 text-xs">
+                    <p className="mt-1 text-warning text-xs">
                       {reviewText(
                         q.review_reasons ?? [],
                         readGrid(q.config['grid']),
@@ -1604,10 +1605,10 @@ export default function QuestionEditorPage() {
                         const pts = ((q.answer_data['answer_points'] as number[]) ?? [])[oi] ?? 0;
                         return (
                           <div key={oi} className="flex items-center gap-2 text-xs">
-                            <span className={pts > 0 ? 'text-green-400' : 'text-slate-500'}>
+                            <span className={pts > 0 ? 'text-success' : 'text-secondary'}>
                               {pts > 0 ? '✓' : '○'}
                             </span>
-                            <span className="font-mono text-slate-500">{optionLetter(oi)}</span>
+                            <span className="font-mono text-secondary">{optionLetter(oi)}</span>
                             <ListThumb
                               id={optionImageIds(q.config as QuestionConfig)[oi] ?? null}
                               images={imagesById}
@@ -1615,9 +1616,9 @@ export default function QuestionEditorPage() {
                               refresh={imageLibrary.reload}
                             />
                             {hasCaption(opt) && (
-                              <span className={pts > 0 ? 'text-slate-200' : 'text-slate-400'}>{opt}</span>
+                              <span className={pts > 0 ? 'text-primary' : 'text-secondary'}>{opt}</span>
                             )}
-                            {pts > 0 && <span className="text-slate-500">({pts}pts)</span>}
+                            {pts > 0 && <span className="text-secondary">({pts}pts)</span>}
                           </div>
                         );
                       })}
@@ -1629,7 +1630,7 @@ export default function QuestionEditorPage() {
                       {(['true', 'false'] as const).map((k) => {
                         const pts = (q.answer_data['answer_points'] as Record<string, number>)?.[k] ?? 0;
                         return (
-                          <span key={k} className={pts > 0 ? 'text-green-400' : 'text-slate-500'}>
+                          <span key={k} className={pts > 0 ? 'text-success' : 'text-secondary'}>
                             {k.charAt(0).toUpperCase() + k.slice(1)}: {pts}pts
                           </span>
                         );
@@ -1638,10 +1639,10 @@ export default function QuestionEditorPage() {
                   )}
 
                   {q.type === 'fill_in_the_blank' && (
-                    <div className="mt-2 text-xs text-slate-400">
+                    <div className="mt-2 text-xs text-secondary">
                       Accepted: {((q.answer_data['acceptedAnswers'] as string[]) ?? []).join(', ')}
                       {(q.answer_data['editDistance'] as number) > 0 && (
-                        <span className="ml-2 text-slate-500">(±{q.answer_data['editDistance'] as number} edit distance)</span>
+                        <span className="ml-2 text-secondary">(±{q.answer_data['editDistance'] as number} edit distance)</span>
                       )}
                     </div>
                   )}
@@ -1653,10 +1654,10 @@ export default function QuestionEditorPage() {
                         const isCorrect = pts > 0;
                         return (
                           <div key={oi} className="flex items-center gap-2 text-xs">
-                            <span className={isCorrect ? 'text-green-400' : pts < 0 ? 'text-red-400' : 'text-slate-500'}>
+                            <span className={isCorrect ? 'text-success' : pts < 0 ? 'text-danger' : 'text-secondary'}>
                               {isCorrect ? '✓' : pts < 0 ? '−' : '○'}
                             </span>
-                            <span className="font-mono text-slate-500">{optionLetter(oi)}</span>
+                            <span className="font-mono text-secondary">{optionLetter(oi)}</span>
                             <ListThumb
                               id={optionImageIds(q.config as QuestionConfig)[oi] ?? null}
                               images={imagesById}
@@ -1664,9 +1665,9 @@ export default function QuestionEditorPage() {
                               refresh={imageLibrary.reload}
                             />
                             {hasCaption(opt) && (
-                              <span className={isCorrect ? 'text-slate-200' : 'text-slate-400'}>{opt}</span>
+                              <span className={isCorrect ? 'text-primary' : 'text-secondary'}>{opt}</span>
                             )}
-                            {pts !== 0 && <span className="text-slate-500">({pts > 0 ? '+' : ''}{pts}pts)</span>}
+                            {pts !== 0 && <span className="text-secondary">({pts > 0 ? '+' : ''}{pts}pts)</span>}
                           </div>
                         );
                       })}
@@ -1681,15 +1682,15 @@ export default function QuestionEditorPage() {
                       : null;
                     return (
                       <div className="mt-2 space-y-1 text-xs">
-                        <p className="text-slate-400">
+                        <p className="text-secondary">
                           Sort It · {boxes.length} boxes · {cards.length} cards
                         </p>
-                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-slate-300">
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-secondary">
                           {cards.map((card, ci) => (
                             <span key={ci}>
                               {card}
                               {key && boxes[key[ci]] !== undefined && (
-                                <span className="text-green-400"> → {boxes[key[ci]]}</span>
+                                <span className="text-success"> → {boxes[key[ci]]}</span>
                               )}
                             </span>
                           ))}
@@ -1702,7 +1703,7 @@ export default function QuestionEditorPage() {
                     const grid = readGrid(q.config['grid']);
                     const cells = readCells(q.answer_data['accepted_cells']);
                     return (
-                      <div className="mt-2 flex items-center gap-3 text-xs text-slate-400">
+                      <div className="mt-2 flex items-center gap-3 text-xs text-secondary">
                         <ListThumb
                           id={canvasImageId(q.config as QuestionConfig)}
                           images={imagesById}
@@ -1713,7 +1714,7 @@ export default function QuestionEditorPage() {
                           Spot It · {grid ? `${grid.cols}×${grid.rows}` : 'no grid'} · {cells.length}{' '}
                           {cells.length === 1 ? 'cell' : 'cells'}
                           {cells.length > 0 && (
-                            <span className="text-green-400"> ({sortCells(cells).map(cellLabel).join(', ')})</span>
+                            <span className="text-success"> ({sortCells(cells).map(cellLabel).join(', ')})</span>
                           )}
                         </span>
                       </div>

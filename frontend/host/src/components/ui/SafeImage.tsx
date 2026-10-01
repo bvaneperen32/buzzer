@@ -82,7 +82,7 @@ export function SafeImage({
 
   return (
     <div
-      className={cn('relative overflow-hidden rounded-lg bg-slate-800', className)}
+      className={cn('relative flex items-center justify-center overflow-hidden rounded-lg bg-raised', className)}
       style={style}
       aria-busy={status === 'loading' && !failed}
     >
@@ -98,15 +98,17 @@ export function SafeImage({
             setStatus('loaded');
           }}
           onError={() => void handleError()}
+          // bg-media keeps a transparent diagram readable in dark. Contained images shrink-wrap
+          // (no object-contain), so it sits only behind the picture and the bands stay bg-raised.
           className={cn(
-            'h-full w-full transition-opacity duration-200',
-            fit === 'cover' ? 'object-cover' : 'object-contain',
+            'bg-media transition-opacity duration-200',
+            fit === 'cover' ? 'h-full w-full object-cover' : 'max-h-full max-w-full',
             status === 'loaded' ? 'opacity-100' : 'opacity-0',
           )}
         />
       )}
       {status === 'loading' && !failed && (
-        <div className="absolute inset-0 animate-pulse bg-slate-700/40" aria-hidden="true" />
+        <div className="absolute inset-0 animate-pulse bg-selected/40" aria-hidden="true" />
       )}
       {failed && compact && showRetry && src && (
         <button
@@ -114,9 +116,9 @@ export function SafeImage({
           onClick={() => void retry()}
           title={`Image unavailable: ${alt}. Click to retry.`}
           aria-label={`Image unavailable: ${alt}. Retry`}
-          className="absolute inset-0 flex items-center justify-center hover:bg-slate-700/60"
+          className="absolute inset-0 flex items-center justify-center hover:bg-hover/60"
         >
-          <ImageOff className="h-4 w-4 text-slate-500" aria-hidden="true" />
+          <ImageOff className="h-4 w-4 text-secondary" aria-hidden="true" />
         </button>
       )}
       {failed && compact && !(showRetry && src) && (
@@ -126,7 +128,7 @@ export function SafeImage({
           title={`Image unavailable: ${alt}`}
           className="absolute inset-0 flex items-center justify-center"
         >
-          <ImageOff className="h-4 w-4 text-slate-500" aria-hidden="true" />
+          <ImageOff className="h-4 w-4 text-secondary" aria-hidden="true" />
         </div>
       )}
       {failed && !compact && (
@@ -135,14 +137,14 @@ export function SafeImage({
           aria-label={`Image unavailable: ${alt}`}
           className="absolute inset-0 flex flex-col items-center justify-center gap-1 p-2 text-center"
         >
-          <ImageOff className="h-5 w-5 shrink-0 text-slate-500" aria-hidden="true" />
-          <p className="text-xs font-semibold text-slate-400">Image unavailable</p>
-          <p className="line-clamp-2 text-xs text-slate-500">{alt}</p>
+          <ImageOff className="h-5 w-5 shrink-0 text-secondary" aria-hidden="true" />
+          <p className="text-xs font-semibold text-secondary">Image unavailable</p>
+          <p className="line-clamp-2 text-xs text-secondary">{alt}</p>
           {showRetry && src && (
             <button
               type="button"
               onClick={() => void retry()}
-              className="mt-1 rounded border border-slate-600 px-2 py-0.5 text-xs text-slate-300 hover:bg-slate-700"
+              className="mt-1 rounded border border-input px-2 py-0.5 text-xs text-primary hover:bg-hover"
             >
               Retry
             </button>

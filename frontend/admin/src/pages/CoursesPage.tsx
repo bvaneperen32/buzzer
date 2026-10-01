@@ -84,17 +84,17 @@ export default function CoursesPage() {
   return (
     <div className="p-8 max-w-4xl">
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold text-slate-100">Courses</h2>
+        <h2 className="text-2xl font-bold text-primary">Courses</h2>
         <Button onClick={() => { setShowForm(!showForm); setEditingCourse(null); }} size="sm">
           <Plus size={16} className="mr-1" /> New Course
         </Button>
       </div>
 
-      {error && <p className="text-red-400 mb-4 text-sm">{error}</p>}
+      {error && <p className="text-danger mb-4 text-sm">{error}</p>}
 
       {showForm && (
         <Card className="mb-6">
-          <CardHeader><h3 className="text-lg font-semibold text-slate-100">Create Course</h3></CardHeader>
+          <CardHeader><h3 className="text-lg font-semibold text-primary">Create Course</h3></CardHeader>
           <CardContent>
             <form onSubmit={handleCreate} className="flex gap-3 flex-wrap">
               <Input
@@ -120,7 +120,7 @@ export default function CoursesPage() {
 
       {editingCourse && (
         <Card className="mb-6">
-          <CardHeader><h3 className="text-lg font-semibold text-slate-100">Edit Course</h3></CardHeader>
+          <CardHeader><h3 className="text-lg font-semibold text-primary">Edit Course</h3></CardHeader>
           <CardContent>
             <form onSubmit={handleEdit} className="flex gap-3 flex-wrap">
               <Input
@@ -145,16 +145,16 @@ export default function CoursesPage() {
       )}
 
       {loading ? (
-        <p className="text-slate-400">Loading…</p>
+        <p className="text-secondary">Loading…</p>
       ) : courses.length === 0 ? (
-        <p className="text-slate-400">No courses yet. Create one above.</p>
+        <p className="text-secondary">No courses yet. Create one above.</p>
       ) : (
         <div className="space-y-3">
           {courses.map((c) => (
             <Card key={c.id} className="flex items-center justify-between px-6 py-4">
               <div>
-                <p className="font-semibold text-slate-100">{c.name}</p>
-                <p className="text-slate-400 text-sm">{c.semester}</p>
+                <p className="font-semibold text-primary">{c.name}</p>
+                <p className="text-secondary text-sm">{c.semester}</p>
               </div>
               <div className="flex gap-2">
                 <Button
@@ -169,7 +169,7 @@ export default function CoursesPage() {
                   href={hostAppUrl(`/rosters/${c.id}`)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center justify-center rounded-lg font-semibold transition-colors px-3 py-1.5 text-sm border border-slate-600 text-slate-200 hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900 focus:ring-slate-500"
+                  className="inline-flex items-center justify-center rounded-lg font-semibold transition-colors px-3 py-1.5 text-sm border border-input text-primary hover:bg-hover"
                 >
                   <Users size={14} className="mr-1" /> Roster
                   <ExternalLink size={12} className="ml-1" />

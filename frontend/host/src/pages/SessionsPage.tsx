@@ -33,10 +33,10 @@ interface ExportOptions {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  LOBBY: 'bg-slate-700 text-slate-300',
-  IN_PROGRESS: 'bg-green-900 text-green-300',
-  COMPLETED: 'bg-indigo-900 text-indigo-300',
-  ABANDONED: 'bg-red-900 text-red-400',
+  LOBBY: 'bg-raised text-secondary',
+  IN_PROGRESS: 'bg-success-subtle text-success',
+  COMPLETED: 'bg-accent-subtle text-accent',
+  ABANDONED: 'bg-danger-subtle text-danger',
 };
 
 function statusLabel(s: string) {
@@ -151,20 +151,20 @@ export default function SessionsPage() {
   return (
     <div className="p-8 max-w-5xl">
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold text-slate-100">
+        <h2 className="text-2xl font-bold text-primary">
           {isAdmin ? 'Sessions' : 'Completed sessions you hosted'}
         </h2>
         {/* Status filter tabs */}
         {isAdmin && (
-          <div className="flex gap-1 bg-slate-800 rounded-lg p-1">
+          <div className="flex gap-1 bg-raised rounded-lg p-1">
             {filters.map((f) => (
               <button
                 key={f}
                 onClick={() => setStatusFilter(f)}
                 className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
                   statusFilter === f
-                    ? 'bg-indigo-600 text-white'
-                    : 'text-slate-400 hover:text-slate-100'
+                    ? 'bg-accent text-on-accent'
+                    : 'text-secondary hover:text-primary'
                 }`}
               >
                 {f === 'ALL' ? 'All' : f === 'IN_PROGRESS' ? 'In Progress' : statusLabel(f)}
@@ -174,12 +174,12 @@ export default function SessionsPage() {
         )}
       </div>
 
-      {error && <p className="text-red-400 mb-4 text-sm">{error}</p>}
+      {error && <p className="text-danger mb-4 text-sm">{error}</p>}
 
       {loading ? (
-        <p className="text-slate-400">Loading…</p>
+        <p className="text-secondary">Loading…</p>
       ) : sessions.length === 0 ? (
-        <p className="text-slate-400">No sessions found.</p>
+        <p className="text-secondary">No sessions found.</p>
       ) : (
         <div className="space-y-2">
           {sessions.map((s) => {
@@ -196,17 +196,17 @@ export default function SessionsPage() {
                 <div className="flex items-center gap-4 px-5 py-3">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium text-slate-100">{s.game_title}</span>
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[s.status] ?? 'bg-slate-700 text-slate-300'}`}>
+                      <span className="font-medium text-primary">{s.game_title}</span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[s.status] ?? 'bg-raised text-secondary'}`}>
                         {statusLabel(s.status)}
                       </span>
                     </div>
-                    <p className="text-slate-400 text-sm mt-0.5">
+                    <p className="text-secondary text-sm mt-0.5">
                       {s.course_name} ({s.course_semester})
-                      {s.host_display_name && <span className="text-slate-500"> · {s.host_display_name}</span>}
+                      {s.host_display_name && <span className="text-secondary"> · {s.host_display_name}</span>}
                     </p>
-                    <p className="text-slate-500 text-xs mt-0.5">
-                      Room <span className="font-mono text-slate-400">{s.room_code}</span>
+                    <p className="text-secondary text-xs mt-0.5">
+                      Room <span className="font-mono text-secondary">{s.room_code}</span>
                       {' · '}{s.player_count} player{s.player_count !== 1 ? 's' : ''}
                       {' · '}{fmtDate(s.created_at)}
                       {s.completed_at && <span> → {fmtDate(s.completed_at)}</span>}
@@ -237,7 +237,7 @@ export default function SessionsPage() {
                     )}
                     {isAdmin && (isDeleting ? (
                       <>
-                        <span className="text-red-400 text-xs">Delete all data?</span>
+                        <span className="text-danger text-xs">Delete all data?</span>
                         <Button size="sm" variant="destructive" onClick={() => void handleDelete(s.session_id)}>
                           Confirm
                         </Button>
@@ -255,10 +255,10 @@ export default function SessionsPage() {
 
                 {/* Export options panel */}
                 {isExpanded && canDownload && (
-                  <div className="border-t border-slate-700 bg-slate-800/50 px-5 py-4 space-y-4">
+                  <div className="border-t border-subtle bg-raised px-5 py-4 space-y-4">
                     {/* Format selector */}
                     <div>
-                      <p className="text-xs text-slate-400 mb-2 font-medium uppercase tracking-wider">Export format</p>
+                      <p className="text-xs text-secondary mb-2 font-medium uppercase tracking-wider">Export format</p>
                       <div className="flex gap-2">
                         {(['canvas', 'raw'] as const).map((fmt) => (
                           <button
@@ -266,8 +266,8 @@ export default function SessionsPage() {
                             onClick={() => setOpt(s.session_id, s.game_title, 'format', fmt)}
                             className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
                               opts.format === fmt
-                                ? 'bg-indigo-600 border-indigo-500 text-white'
-                                : 'border-slate-600 text-slate-300 hover:border-slate-500'
+                                ? 'bg-accent border-accent text-on-accent'
+                                : 'border-input text-secondary hover:bg-hover hover:text-primary'
                             }`}
                           >
                             {fmt === 'canvas' ? 'Canvas Gradebook' : 'Raw CSV'}
@@ -281,7 +281,7 @@ export default function SessionsPage() {
                         {/* Assignment title + ID */}
                         <div className="grid grid-cols-2 gap-4">
                           <div>
-                            <label className="block text-xs text-slate-400 mb-1">Assignment name</label>
+                            <label className="block text-xs text-secondary mb-1">Assignment name</label>
                             <Input
                               value={opts.title}
                               onChange={(e) => setOpt(s.session_id, s.game_title, 'title', e.target.value)}
@@ -290,9 +290,9 @@ export default function SessionsPage() {
                             />
                           </div>
                           <div>
-                            <label className="block text-xs text-slate-400 mb-1">
+                            <label className="block text-xs text-secondary mb-1">
                               Canvas assignment ID
-                              <span className="text-slate-500 ml-1">(optional)</span>
+                              <span className="text-secondary ml-1">(optional)</span>
                             </label>
                             <Input
                               value={opts.assignmentId}
@@ -303,9 +303,9 @@ export default function SessionsPage() {
                           </div>
                         </div>
                         {/* Column header preview */}
-                        <p className="text-slate-500 text-xs -mt-2">
+                        <p className="text-secondary text-xs -mt-2">
                           Column header preview:{' '}
-                          <span className="font-mono text-slate-300">
+                          <span className="font-mono text-secondary">
                             {opts.assignmentId.trim()
                               ? `${opts.title} (${opts.assignmentId.trim()})`
                               : opts.title || '—'}
@@ -313,9 +313,9 @@ export default function SessionsPage() {
                         </p>
                         {/* SIS domain */}
                         <div className="max-w-xs">
-                          <label className="block text-xs text-slate-400 mb-1">
+                          <label className="block text-xs text-secondary mb-1">
                             SIS Login ID domain
-                            <span className="text-slate-500 ml-1">(appended to netid)</span>
+                            <span className="text-secondary ml-1">(appended to netid)</span>
                           </label>
                           <Input
                             value={opts.sisDomain}
@@ -323,7 +323,7 @@ export default function SessionsPage() {
                             placeholder="wisc.edu"
                             className="text-sm font-mono"
                           />
-                          <p className="text-slate-500 text-xs mt-1">
+                          <p className="text-secondary text-xs mt-1">
                             Preview: <span className="font-mono">jsmith{opts.sisDomain ? `@${opts.sisDomain}` : ''}</span>
                           </p>
                         </div>
@@ -335,11 +335,11 @@ export default function SessionsPage() {
                               type="checkbox"
                               checked={opts.rosterOnly}
                               onChange={(e) => setOpt(s.session_id, s.game_title, 'rosterOnly', e.target.checked)}
-                              className="rounded border-slate-600 accent-indigo-500"
+                              className="rounded border-input accent-primary"
                             />
-                            <span className="text-sm text-slate-300">
+                            <span className="text-sm text-secondary">
                               Roster-matched players only
-                              <span className="text-slate-500 ml-1 text-xs">(skip guests and local accounts without a netid)</span>
+                              <span className="text-secondary ml-1 text-xs">(skip guests and local accounts without a netid)</span>
                             </span>
                           </label>
                           <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -347,11 +347,11 @@ export default function SessionsPage() {
                               type="checkbox"
                               checked={opts.perQuestion}
                               onChange={(e) => setOpt(s.session_id, s.game_title, 'perQuestion', e.target.checked)}
-                              className="rounded border-slate-600 accent-indigo-500"
+                              className="rounded border-input accent-primary"
                             />
-                            <span className="text-sm text-slate-300">
+                            <span className="text-sm text-secondary">
                               Per-question breakdown
-                              <span className="text-slate-500 ml-1 text-xs">(one column per question, otherwise total only)</span>
+                              <span className="text-secondary ml-1 text-xs">(one column per question, otherwise total only)</span>
                             </span>
                           </label>
                         </div>
@@ -359,7 +359,7 @@ export default function SessionsPage() {
                     )}
 
                     {opts.format === 'raw' && (
-                      <p className="text-slate-500 text-xs">
+                      <p className="text-secondary text-xs">
                         Raw CSV includes all players, per-question scores, and totals.
                       </p>
                     )}

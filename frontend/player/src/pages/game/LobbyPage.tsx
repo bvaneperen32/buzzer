@@ -10,16 +10,16 @@ export default function LobbyPage() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-6 gap-6 text-center">
       <div className="space-y-2">
-        <p className="text-slate-400 text-sm uppercase tracking-widest">Room</p>
-        <p className="text-4xl font-black font-mono tracking-widest text-white">{roomCode}</p>
+        <p className="text-secondary text-sm uppercase tracking-widest">Room</p>
+        <p className="text-4xl font-black font-mono tracking-widest text-primary">{roomCode}</p>
       </div>
 
       <div className="mt-4 space-y-2">
         <div className="flex justify-center">
-          <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+          <div className="w-12 h-12 border-4 border-accent border-t-transparent rounded-full animate-spin" />
         </div>
-        <p className="text-slate-300 text-lg font-medium">{statusText}</p>
-        <p className="text-slate-500 text-sm">
+        <p className="text-secondary text-lg font-medium">{statusText}</p>
+        <p className="text-secondary text-sm">
           {playerCount} player{playerCount !== 1 ? 's' : ''} in room
         </p>
       </div>

@@ -37,7 +37,10 @@ export function SafeImage({ src, alt, className, style }: SafeImageProps) {
   }
 
   return (
-    <div className={cn('relative overflow-hidden rounded-xl bg-slate-800', className)} style={style}>
+    <div
+      className={cn('relative flex items-center justify-center overflow-hidden rounded-xl bg-raised', className)}
+      style={style}
+    >
       {status !== 'failed' && (
         <img
           key={attempt}
@@ -46,19 +49,21 @@ export function SafeImage({ src, alt, className, style }: SafeImageProps) {
           draggable={false}
           onLoad={() => setStatus('loaded')}
           onError={handleError}
+          // bg-media keeps a transparent diagram readable in dark. The image shrink-wraps (no
+          // object-contain), so it sits only behind the picture and the bands stay bg-raised.
           className={cn(
-            'h-full w-full object-contain transition-opacity duration-200',
+            'max-h-full max-w-full bg-media transition-opacity duration-200',
             status === 'loaded' ? 'opacity-100' : 'opacity-0',
           )}
         />
       )}
       {status === 'loading' && (
-        <div className="absolute inset-0 animate-pulse bg-slate-700/40" aria-hidden="true" />
+        <div className="absolute inset-0 animate-pulse bg-selected/40" aria-hidden="true" />
       )}
       {status === 'failed' && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 p-2 text-center">
-          <p className="text-xs font-semibold text-slate-300">Image unavailable</p>
-          <p className="line-clamp-3 text-xs text-slate-400">{alt}</p>
+          <p className="text-xs font-semibold text-secondary">Image unavailable</p>
+          <p className="line-clamp-3 text-xs text-secondary">{alt}</p>
         </div>
       )}
     </div>

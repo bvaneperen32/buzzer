@@ -14,18 +14,18 @@ function T7Results({ results }: { results: PlayerResultsPayload }) {
     <div className="min-h-screen flex flex-col items-center justify-center p-6 gap-4 text-center" data-t7-results={results.questionType}>
       <p className={`text-3xl font-black leading-tight ${TONE_CLASS[tone]}`}>{main}</p>
       {extra.map((line) => (
-        <p key={line} className="text-slate-300 text-base">{line}</p>
+        <p key={line} className="text-secondary text-base">{line}</p>
       ))}
-      {points && <p className="text-slate-100 text-2xl font-bold">{points}</p>}
+      {points && <p className="text-primary text-2xl font-bold">{points}</p>}
       <div className="mt-2 space-y-1">
-        <p className="text-slate-300 text-lg">
-          Total: <span className="font-bold text-white">{results.yourScore.toLocaleString()}</span> pts
+        <p className="text-secondary text-lg">
+          Total: <span className="font-bold text-primary">{results.yourScore.toLocaleString()}</span> pts
         </p>
-        <p className="text-slate-400 text-base">
-          Rank <span className="font-bold text-white">#{results.yourRank}</span> of {results.playerCount}
+        <p className="text-secondary text-base">
+          Rank <span className="font-bold text-primary">#{results.yourRank}</span> of {results.playerCount}
         </p>
       </div>
-      <p className="text-slate-500 text-sm mt-4">Waiting for next question…</p>
+      <p className="text-secondary text-sm mt-4">Waiting for next question…</p>
     </div>
   );
 }
@@ -57,7 +57,7 @@ export default function ResultsPage() {
   if (!questionResults) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <p className="text-slate-400">Loading results…</p>
+        <p className="text-secondary">Loading results…</p>
       </div>
     );
   }
@@ -91,43 +91,43 @@ export default function ResultsPage() {
       {noAnswer ? (
         <p className={`${TONE_CLASS.missing} text-4xl font-black`}>No answer</p>
       ) : isCompleteness ? (
-        <p className="text-indigo-400 text-4xl font-black">Answer recorded!</p>
+        <p className="text-accent text-4xl font-black">Answer recorded!</p>
       ) : isCorrect ? (
-        <p className="text-green-400 text-4xl font-black">Correct!</p>
+        <p className="text-success text-4xl font-black">Correct!</p>
       ) : (
-        <p className="text-red-400 text-4xl font-black">Incorrect</p>
+        <p className="text-danger text-4xl font-black">Incorrect</p>
       )}
 
       {/* What the player answered */}
       {answeredLabel && (
-        <p className="text-slate-400 text-base">
-          You answered: <span className="text-slate-200 font-semibold">{answeredLabel}</span>
+        <p className="text-secondary text-base">
+          You answered: <span className="text-primary font-semibold">{answeredLabel}</span>
         </p>
       )}
 
       {/* Correct answer for FITB ACCURACY */}
       {isFitb && fitbAccepted.length > 0 && (
-        <p className="text-slate-400 text-base">
-          Correct: <span className="text-green-400 font-semibold">{fitbAccepted.join(' / ')}</span>
+        <p className="text-secondary text-base">
+          Correct: <span className="text-success font-semibold">{fitbAccepted.join(' / ')}</span>
         </p>
       )}
 
       {/* Points for this question */}
-      <p className="text-slate-100 text-3xl font-bold">
+      <p className="text-primary text-3xl font-bold">
         +{yourPoints.toLocaleString()} pts
       </p>
 
       {/* Running total and rank */}
       <div className="mt-2 space-y-1">
-        <p className="text-slate-300 text-lg">
-          Total: <span className="font-bold text-white">{yourScore.toLocaleString()}</span> pts
+        <p className="text-secondary text-lg">
+          Total: <span className="font-bold text-primary">{yourScore.toLocaleString()}</span> pts
         </p>
-        <p className="text-slate-400 text-base">
-          Rank <span className="font-bold text-white">#{yourRank}</span> of {playerCount}
+        <p className="text-secondary text-base">
+          Rank <span className="font-bold text-primary">#{yourRank}</span> of {playerCount}
         </p>
       </div>
 
-      <p className="text-slate-500 text-sm mt-4">Waiting for next question…</p>
+      <p className="text-secondary text-sm mt-4">Waiting for next question…</p>
     </div>
   );
 }
