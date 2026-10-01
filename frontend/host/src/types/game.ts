@@ -106,6 +106,13 @@ export interface AnswerPhaseEndedPayload {
   allAnswered?: boolean; // true only when every player answered (not just timer expiry)
 }
 
+/** Show Results published nothing: an answer let in before the question closed was still being
+ *  recorded. The question stays closed; showing the results again can succeed. */
+export interface ResultsDelayedPayload {
+  questionId: number;
+  answersPending: number;
+}
+
 export interface LeaderboardEntry {
   userId: string;
   displayName: string;

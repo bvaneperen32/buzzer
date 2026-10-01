@@ -17,22 +17,35 @@ Without --fast those scenarios are skipped automatically.
 Test isolation
 --------------
 Every test gets a freshly-created game (course + game + questions) and a new
-room, so tests are independent and can run in any order.  Cleanup deletes the
-game record; MySQL CASCADE removes questions and sessions automatically.
+room, so tests are independent and can run in any order.
+
+Test data
+---------
+Every record a test creates through httpx — a course, game, room session, guest
+or local user, whichever helper made it — is recorded by exact id in an
+ownership ledger (tests/ledger.py) and deleted when the test ends, whether it
+passed or failed; records a module- or session-scoped fixture creates, when the
+session ends. A killed run leaves its ledgers for `python tests/cleanup.py`.
+Nothing the run didn't create is deleted (see "Test data" below).
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shlex
 import subprocess
 import time
 import logging
 import pathlib
+import uuid
+import warnings
 from typing import Generator
 
 import httpx
 import pytest
+
+from ..ledger import Ledger, default_db_connect, ledger_dir, teardown, token_subject
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +114,21 @@ def wait_until(check, *, timeout: float = 5.0, what: str = "the write"):
         if time.monotonic() >= deadline:
             raise AssertionError(f"Timed out after {timeout}s waiting for {what}")
         time.sleep(0.1)
+
+
+def db_settings() -> dict:
+    """The stack's MySQL on the published port, as the backend's account (BUZZER_TEST_DB_*
+    override each field). Used by the T8/T7 lock tests and the browser checks' cleanup."""
+    env = read_repo_env()
+    return {
+        "host": os.environ.get("BUZZER_TEST_DB_HOST", "127.0.0.1"),
+        "port": int(os.environ.get("BUZZER_TEST_DB_PORT", "3306")),
+        "database": os.environ.get("BUZZER_TEST_DB_NAME", "buzzer"),
+        "user": os.environ.get("BUZZER_TEST_DB_USER", "app_user"),
+        "password": os.environ.get(
+            "BUZZER_TEST_DB_PASSWORD", env.get("MYSQL_PASSWORD", "")
+        ),
+    }
 
 
 def redis_cli(*args: str, timeout: float = 20.0) -> str:
@@ -199,16 +227,20 @@ def docker_stack(base_url: str):
 # Admin token (session-scoped — one login for the whole session)
 # ---------------------------------------------------------------------------
 
+def _admin_credentials() -> tuple[str, str]:
+    env_vars = read_repo_env()
+    username = env_vars.get("ADMIN_USERNAME") or os.environ.get("ADMIN_USERNAME", "admin")
+    password = env_vars.get("ADMIN_PASSWORD") or os.environ.get("ADMIN_PASSWORD", "changeme123")
+    return username, password
+
+
 @pytest.fixture(scope="session")
 def admin_token(docker_stack, base_url: str) -> str:
     """
     Log in as the admin user and return an access token.
     Credentials are read from the .env file (ADMIN_USERNAME / ADMIN_PASSWORD).
     """
-    env_vars = read_repo_env()
-
-    username = env_vars.get("ADMIN_USERNAME") or os.environ.get("ADMIN_USERNAME", "admin")
-    password = env_vars.get("ADMIN_PASSWORD") or os.environ.get("ADMIN_PASSWORD", "changeme123")
+    username, password = _admin_credentials()
 
     r = httpx.post(
         f"{base_url}/api/auth/login",
@@ -223,6 +255,124 @@ def admin_token(docker_stack, base_url: str) -> str:
     assert token, "Login response missing access_token"
     logger.info("Admin login OK")
     return token
+
+
+# ---------------------------------------------------------------------------
+# Test data: every record a run creates is owned, and deleted after its test
+# ---------------------------------------------------------------------------
+#
+# Creations are recorded from the responses themselves (httpx.Client.send and
+# AsyncClient.send are wrapped for the session), so every helper — this file's,
+# T4Env, T8Env, a test's own requests — is covered without being changed. Only
+# a successful POST to a creating route is recorded, by the id it returned.
+#
+# Nothing the run didn't create is deleted. Pre-existing records never enter a
+# ledger. Guests need more: /api/auth/guest with an existing guest's email hands
+# back *that* guest, with the same response as a creation. So a guest is the
+# run's only when its email came from mint_guest_email() (128 random bits,
+# claimed in the ledger before the request); any other guest is recorded as
+# uncertain, reported, and kept (tests/ledger.py).
+
+class _Ownership:
+    run: Ledger | None = None  # records made outside a test (module/session fixtures)
+    test: Ledger | None = None  # records made by the running test and its fixtures
+
+
+_OWNED = _Ownership()
+
+
+def mint_guest_email(label: str = "guest") -> str:
+    """The email for a guest the running test (or fixture) is about to create, claimed in its
+    ledger first, so the suite can prove the guest is its own and delete it afterwards. Every
+    guest a test creates should use one; a guest made with any other email is kept."""
+    ledger = _OWNED.test or _OWNED.run
+    if ledger is None:  # outside a pytest run: nothing can own it
+        local = "".join(ch for ch in label.lower() if ch.isalnum()) or "guest"
+        return f"{local}.{uuid.uuid4().hex}@example.com"
+    return ledger.mint_guest_email(label)
+
+
+def _record_creation(response: httpx.Response) -> None:
+    ledger = _OWNED.test or _OWNED.run
+    request = response.request
+    if ledger is None or request.method != "POST" or response.status_code not in (200, 201):
+        return
+    path = request.url.path
+    try:
+        body = response.json()
+    except ValueError:
+        return
+    if path == "/api/admin/courses":
+        ledger.record("courses", id=body["id"], name=body["name"], semester=body["semester"])
+    elif path in ("/api/admin/games", "/api/host/games"):
+        ledger.record("games", id=body["id"], title=body["title"])
+    elif path in ("/api/admin/games/import", "/api/host/games/import"):
+        ledger.record("games", id=body["game_id"])  # identified by its creation time
+    elif path == "/api/game/rooms":
+        ledger.record("sessions", id=body["session_id"], room_code=body["room_code"])
+    elif path == "/api/auth/guest":
+        # Owned only if the email was minted by this run (the test's or the run's ledger):
+        # otherwise the response may be an existing guest handed back.
+        email = json.loads(request.content)["email"]
+        owned = any(led is not None and led.is_minted(email) for led in (_OWNED.test, _OWNED.run))
+        ledger.record("guests", id=token_subject(body["access_token"]), email=email, owned=owned)
+    elif path == "/api/admin/users":
+        ledger.record("users", id=body["id"], username=body["username"])
+
+
+def _clean(ledger: Ledger, base_url: str) -> None:
+    """Delete what the ledger owns. Anything kept stays in its file (for tests/cleanup.py)
+    and is reported as a warning, not a test failure."""
+    if ledger.is_empty():
+        return
+    username, password = _admin_credentials()
+    with httpx.Client(base_url=base_url, timeout=30.0) as http:
+        r = http.post("/api/auth/login", json={"username": username, "password": password})
+        if r.status_code != 200:
+            warnings.warn(f"Test data kept in {ledger.path}: admin login failed ({r.status_code})")
+            return
+        problems = teardown(ledger, http, r.json()["access_token"], db_connect=default_db_connect)
+    if problems:
+        warnings.warn(f"Test data kept or skipped ({ledger.path.name}): " + "; ".join(problems))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _own_created_records(base_url: str):
+    run = Ledger.begin(ledger_dir(), "integration", base_url=base_url)
+    _OWNED.run = run
+    real_send, real_async_send = httpx.Client.send, httpx.AsyncClient.send
+
+    def send(self, request, **kwargs):
+        response = real_send(self, request, **kwargs)
+        if not kwargs.get("stream"):
+            _record_creation(response)
+        return response
+
+    async def async_send(self, request, **kwargs):
+        response = await real_async_send(self, request, **kwargs)
+        if not kwargs.get("stream"):
+            _record_creation(response)
+        return response
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(httpx.Client, "send", send)
+        patch.setattr(httpx.AsyncClient, "send", async_send)
+        yield run
+    _OWNED.run = None
+    _clean(run, base_url)
+
+
+@pytest.fixture(autouse=True)
+def _own_test_records(_own_created_records: Ledger, base_url: str):
+    """Set up before, and torn down after, every other fixture of the test."""
+    run_id = _own_created_records.data["run_id"][:12]
+    ledger = Ledger.begin(
+        ledger_dir(), "integration", base_url=base_url, name=f"integration-{run_id}-test"
+    )
+    _OWNED.test = ledger
+    yield ledger
+    _OWNED.test = None
+    _clean(ledger, base_url)
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +395,8 @@ def game_setup(docker_stack, base_url: str, admin_token: str, fast_mode: bool):
             "question_ids": list[int],   # in question order
         }
 
-    Deletes the Game on teardown (MySQL CASCADE removes everything else).
+    The run's ownership ledger deletes the course and game (with their rooms)
+    after the test.
     """
     import uuid as _uuid
     tag = _uuid.uuid4().hex[:8]
@@ -281,14 +432,6 @@ def game_setup(docker_stack, base_url: str, admin_token: str, fast_mode: bool):
         "game_id": game_id,
         "fast_mode": fast_mode,
     }
-
-    # --- Teardown (CASCADE removes questions, sessions, scores) ---
-    httpx.delete(
-        f"{base_url}/api/admin/games/{game_id}",
-        headers=headers,
-        timeout=10.0,
-    )
-    # Courses have no cascade and no DELETE endpoint; leave them as inert records.
 
 
 def create_questions(
@@ -340,7 +483,8 @@ def create_room(base_url: str, admin_token: str, course_id: int, game_id: int) -
 def create_guest_tokens(
     base_url: str, room_code: str, n: int
 ) -> list[str]:
-    """Register n guest players for a room and return their access tokens."""
+    """Register n guest players for a room and return their access tokens. Their emails are
+    minted, so the suite deletes the guests after the test."""
     import uuid as _uuid
     tokens = []
     for i in range(n):
@@ -349,7 +493,7 @@ def create_guest_tokens(
             f"{base_url}/api/auth/guest",
             json={
                 "display_name": f"TestPlayer{i}_{uid}",
-                "email": f"testplayer{i}.{uid}@example.com",
+                "email": mint_guest_email(f"testplayer{i}"),
                 "room_code": room_code,
             },
             timeout=10.0,

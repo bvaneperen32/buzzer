@@ -242,13 +242,15 @@ Tests run against the live Docker stack (start it first). Dependencies are alrea
 python -m pytest tests/integration/ -q
 ```
 
+The suite deletes what its tests create: every course, game, room, guest and local user a test creates is recorded by exact id and deleted when the test ends, whether it passed or failed. Records it didn't create are never touched. Because `/api/auth/guest` hands back an existing guest for a known email, a test creates guests only with emails from `conftest.mint_guest_email()` (random, claimed before the request); a guest made with any other email is reported and kept, never deleted. A run killed outright leaves its records listed in `tests/.ledgers/`; `python tests/cleanup.py` deletes them (details in [tests/browser/README.md](tests/browser/README.md), "Test data").
+
 Include timer-expiry edge cases (sets `time_limit_seconds=2` so tests finish quickly):
 
 ```bash
 python -m pytest tests/integration/ -q --fast
 ```
 
-The image tests (`test_t8_images.py`) include **lock tests** that hold a game's row lock from their own MySQL connection, on the published port `3306`, as the backend's account. They read `MYSQL_PASSWORD` from `.env`; override with `BUZZER_TEST_DB_HOST` / `_PORT` / `_NAME` / `_USER` / `_PASSWORD`. If they skip, image verification is incomplete, not passed. Two opt-in modules need extra flags:
+The image tests (`test_t8_images.py`) include **lock tests** that hold a game's row lock from their own MySQL connection, on the published port `3306`, as the backend's account. They read `MYSQL_PASSWORD` from `.env`; override with `BUZZER_TEST_DB_HOST` / `_PORT` / `_NAME` / `_USER` / `_PASSWORD`. If they skip, image verification is incomplete, not passed. The test-data tests (`test_data_hygiene.py`) use the same connection, and so does the suite's own cleanup of the courses its tests create. The live-session tests (`test_live_session.py`) also read the room from Redis and the backend's log, through `docker compose` from the repo root (override with `BUZZER_TEST_REDIS_CLI` / `BUZZER_TEST_BACKEND_LOGS`). Two opt-in modules need extra flags:
 
 ```bash
 # Per-route request body limits, through nginx (after npm run build, with the stack up)

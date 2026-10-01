@@ -32,7 +32,6 @@ import base64
 import hashlib
 import io
 import json
-import os
 import pathlib
 import random
 import re
@@ -47,7 +46,13 @@ import httpx
 import pytest
 from PIL import Image
 
-from .conftest import create_guest_tokens, read_repo_env, redis_cli, wait_until
+from .conftest import (
+    create_guest_tokens,
+    db_settings,
+    read_repo_env,
+    redis_cli,
+    wait_until,
+)
 from .engine.socket_client import TestSocketClient as SocketClient
 
 _REPO_ROOT = pathlib.Path(__file__).parent.parent.parent
@@ -127,19 +132,6 @@ def sha256(data: bytes) -> str:
 # ---------------------------------------------------------------------------
 # Direct MySQL access: the lock harness and planted legacy data
 # ---------------------------------------------------------------------------
-
-
-def db_settings() -> dict:
-    env = read_repo_env()
-    return {
-        "host": os.environ.get("BUZZER_TEST_DB_HOST", "127.0.0.1"),
-        "port": int(os.environ.get("BUZZER_TEST_DB_PORT", "3306")),
-        "database": os.environ.get("BUZZER_TEST_DB_NAME", "buzzer"),
-        "user": os.environ.get("BUZZER_TEST_DB_USER", "app_user"),
-        "password": os.environ.get(
-            "BUZZER_TEST_DB_PASSWORD", env.get("MYSQL_PASSWORD", "")
-        ),
-    }
 
 
 def db_connect():
@@ -1982,9 +1974,17 @@ class StoredSizeGame:
         )
 
     def put_probe(self, **fields) -> httpx.Response:
-        return self.t8.admin(
+        """Update the probe. An accepted update commits only after its response, and
+        set_headroom sizes the padding from a meter read, so this returns only once the probe
+        reads back as the response stored it: the meter then includes the change. (Without
+        this, a meter read could miss the change and size the padding that many bytes too
+        long.)"""
+        r = self.t8.admin(
             "PUT", f"/api/host/games/{self.game_id}/questions/{self.probe}", json=fields
         )
+        if r.status_code == 200:
+            wait_until(lambda: self.probe_question() == r.json(), what="the probe's update")
+        return r
 
     def probe_question(self) -> dict:
         return self.t8.question(self.game_id, self.probe)

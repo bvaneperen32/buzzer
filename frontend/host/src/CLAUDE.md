@@ -146,7 +146,8 @@ Six pieces of logic exist in both this app and the backend and must be changed t
 
 - Any socket `error` event makes `GameLayout` replace the entire game UI with an error screen,
   cleared only when the socket reconnects — including recoverable errors such as starting a game
-  that has no questions.
+  that has no questions. A lost connection after the first connect shows a "reconnecting" banner
+  instead, and leaves the screen mounted.
 
 ### Styling
 

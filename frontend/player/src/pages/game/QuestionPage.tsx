@@ -75,9 +75,12 @@ function OptionTiles({
 }
 
 export default function QuestionPage() {
-  const { currentQuestion, questionLocked, emitAnswer } = useGame();
+  const { currentQuestion, questionLocked, pendingAnswerId, rejectedAnswerId, emitAnswer } = useGame();
   const startTimeRef = useRef(Date.now());
-  const [submitted, setSubmitted] = useState(false);
+  // Sent (or waiting for the socket to rejoin) and not yet acknowledged; the server's
+  // acknowledgement moves the phone to "Answer locked in!". If the answer can't be delivered
+  // (the question locked while reconnecting), this clears and the page shows the lock.
+  const submitted = currentQuestion !== null && pendingAnswerId === currentQuestion.questionId;
   const [inputValue, setInputValue] = useState('');
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
 
@@ -100,7 +103,6 @@ export default function QuestionPage() {
 
   function submit(answerData: Record<string, unknown>) {
     if (submitted) return;
-    setSubmitted(true);
     emitAnswer(currentQuestion!.questionId, answerData, Date.now() - startTimeRef.current);
   }
 
@@ -112,7 +114,9 @@ export default function QuestionPage() {
 
   const lockedMsg = (
     <p className="text-center text-amber-400 text-sm mt-4 font-semibold">
-      Answers locked — waiting for results…
+      {rejectedAnswerId === currentQuestion.questionId
+        ? 'Too late — answers had already closed, so that answer didn’t count.'
+        : 'Answers locked — waiting for results…'}
     </p>
   );
 
@@ -147,7 +151,7 @@ export default function QuestionPage() {
             <span>{opt}</span>
           </button>
         ))}
-        {submitted && <p className="text-center text-slate-400 text-sm mt-4">Answer submitted — waiting for results…</p>}
+        {submitted && <p className="text-center text-slate-400 text-sm mt-4">Sending your answer…</p>}
         {!submitted && questionLocked && lockedMsg}
       </div>
     );
@@ -174,7 +178,7 @@ export default function QuestionPage() {
         >
           False
         </button>
-        {submitted && <p className="text-center text-slate-400 text-sm mt-2">Answer submitted — waiting for results…</p>}
+        {submitted && <p className="text-center text-slate-400 text-sm mt-2">Sending your answer…</p>}
         {!submitted && questionLocked && lockedMsg}
       </div>
     );
@@ -189,10 +193,8 @@ export default function QuestionPage() {
 
         {submitted ? (
           <div className="flex flex-col items-center gap-3">
-            <div className="text-5xl">🔒</div>
-            <p className="text-slate-100 text-xl font-bold">Answer locked in!</p>
+            <p className="text-slate-100 text-xl font-bold">Sending your answer…</p>
             <p className="text-slate-400 text-base italic">"{inputValue.trim()}"</p>
-            <p className="text-slate-500 text-sm mt-2">Waiting for results…</p>
           </div>
         ) : questionLocked ? (
           <div className="flex flex-col items-center gap-3 mt-4">
@@ -284,7 +286,7 @@ export default function QuestionPage() {
             Submit ({selectedIndices.size} selected)
           </button>
         )}
-        {submitted && <p className="text-center text-slate-400 text-sm mt-4">Answer submitted — waiting for results…</p>}
+        {submitted && <p className="text-center text-slate-400 text-sm mt-4">Sending your answer…</p>}
         {!submitted && questionLocked && lockedMsg}
       </div>
     );
@@ -310,7 +312,7 @@ export default function QuestionPage() {
           disabled={submitted || questionLocked}
           onSubmit={(placements) => submit({ placements })}
         />
-        {submitted && <p className="text-center text-slate-400 text-sm mt-2">Answer submitted — waiting for results…</p>}
+        {submitted && <p className="text-center text-slate-400 text-sm mt-2">Sending your answer…</p>}
         {!submitted && questionLocked && lockedMsg}
       </div>
     );
@@ -336,7 +338,7 @@ export default function QuestionPage() {
             disabled={submitted || questionLocked}
             onLockIn={(cell) => submit({ col: cell.col, row: cell.row })}
           />
-          {submitted && <p className="text-center text-slate-400 text-sm mt-2">Answer submitted — waiting for results…</p>}
+          {submitted && <p className="text-center text-slate-400 text-sm mt-2">Sending your answer…</p>}
           {!submitted && questionLocked && lockedMsg}
         </div>
       );

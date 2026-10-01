@@ -5,14 +5,11 @@ compose stack): the UI and the API alike. Every browser context pins `locale: 'e
 expected number strings are deterministic; the apps themselves keep the viewer's locale.
 
 Configuration comes from the environment (see README.md); no credentials are stored here.
-Setup uses the REST API as the admin; the checks use the real UI.
+Setup uses the REST API as the admin; the checks use the real UI. Everything setup creates is
+recorded in the run's ownership ledger (tests/ledger.py) and deleted when the run ends.
 
-Results are printed and appended to `<output>/results.jsonl`:
-- PASS / FAIL — a T7 behaviour;
-- XFAIL — a known pre-existing bug reproduced (recorded in the spec's §11, not T7's to fix);
-- XPASS — a known bug did *not* reproduce: it may have been fixed, so its entry, and the
-  `rejoined()` synchronization below, need revisiting.
-A run exits non-zero on any FAIL.
+Results are printed and appended to `<output>/results.jsonl`, one PASS or FAIL per check. A run
+exits non-zero on any FAIL.
 """
 
 from __future__ import annotations
@@ -31,9 +28,11 @@ import uuid
 import httpx
 from PIL import Image
 
-TESTS = pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(TESTS))
-from integration.conftest import read_repo_env  # noqa: E402
+REPO = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO))  # the `tests` package: its ledger and the integration helpers
+from tests.ledger import (  # noqa: E402
+    Ledger, admin_login, ledger_dir, teardown, token_subject,
+)
 
 BASE = os.environ.get("BUZZER_BROWSER_BASE_URL", "http://localhost:8080").rstrip("/")
 CHANNEL = os.environ.get("BUZZER_BROWSER_CHANNEL", "chrome") or None
@@ -42,31 +41,16 @@ OUTPUT = pathlib.Path(os.environ.get("BUZZER_BROWSER_OUTPUT", pathlib.Path(__fil
 SHOTS = OUTPUT / "shots"
 SHOTS.mkdir(parents=True, exist_ok=True)
 RESULTS = OUTPUT / "results.jsonl"
+LEDGERS = ledger_dir()
+
+# The semester of every course the checks create ("BC <title> <tag>").
+SEMESTER = "T7 checks"
 
 PHONES = {
     "390x844@3": {"viewport": {"width": 390, "height": 844}, "device_scale_factor": 3},
     "360x640@2": {"viewport": {"width": 360, "height": 640}, "device_scale_factor": 2},
     "640x360@1": {"viewport": {"width": 640, "height": 360}, "device_scale_factor": 1},
 }
-
-
-def admin_credentials() -> tuple[str, str]:
-    """BUZZER_ADMIN_USERNAME / BUZZER_ADMIN_PASSWORD, else ADMIN_USERNAME / ADMIN_PASSWORD from
-    the environment, else from the repo's .env (as the integration suite reads them)."""
-    env = read_repo_env()
-    username = (
-        os.environ.get("BUZZER_ADMIN_USERNAME")
-        or os.environ.get("ADMIN_USERNAME")
-        or env.get("ADMIN_USERNAME")
-    )
-    password = (
-        os.environ.get("BUZZER_ADMIN_PASSWORD")
-        or os.environ.get("ADMIN_PASSWORD")
-        or env.get("ADMIN_PASSWORD")
-    )
-    if not username or not password:
-        sys.exit("Set BUZZER_ADMIN_USERNAME and BUZZER_ADMIN_PASSWORD (or ADMIN_* in .env).")
-    return username, password
 
 
 async def launch(playwright):
@@ -82,7 +66,7 @@ class Checks:
 
     def _record(self, name: str, status: str, detail: object) -> None:
         self.items.append((name, status, str(detail)))
-        shown = f" — {detail}" if detail and status in ("FAIL", "XPASS", "XFAIL") else ""
+        shown = f" — {detail}" if detail and status == "FAIL" else ""
         print(f"{status:5} [{self.scenario}] {name}{shown}", flush=True)
         with RESULTS.open("a") as f:
             f.write(json.dumps({"scenario": self.scenario, "check": name, "status": status,
@@ -92,16 +76,11 @@ class Checks:
         self._record(name, "PASS" if ok else "FAIL", detail)
         return bool(ok)
 
-    def known_issue(self, bug: str, name: str, reproduced: bool, detail: object = "") -> None:
-        """A pre-existing bug (spec §11) checked directly: XFAIL when it reproduces."""
-        self._record(f"[{bug}] {name}", "XFAIL" if reproduced else "XPASS", detail)
-
     def summary(self) -> int:
-        count = {s: sum(1 for _, st, _ in self.items if st == s) for s in ("PASS", "FAIL", "XFAIL", "XPASS")}
-        print(f"\n[{self.scenario}] {count['PASS']} passed, {count['FAIL']} failed, "
-              f"{count['XFAIL']} known issues reproduced, {count['XPASS']} known issues not reproduced")
+        count = {s: sum(1 for _, st, _ in self.items if st == s) for s in ("PASS", "FAIL")}
+        print(f"\n[{self.scenario}] {count['PASS']} passed, {count['FAIL']} failed")
         for name, status, _ in self.items:
-            if status in ("FAIL", "XPASS"):
+            if status == "FAIL":
                 print(f"  {status}: {name}")
         return 1 if count["FAIL"] else 0
 
@@ -113,13 +92,15 @@ class Checks:
 
 class SocketLog:
     """The socket.io WebSockets a page has opened: when each opened, whether it has re-joined
-    (received `sync_state`), and the events it received."""
+    (received `sync_state`), the events it received and when, and — through a SocketProxy —
+    the events the page sent and when."""
 
     def __init__(self):
         self.sockets: list[dict] = []
 
     def _new(self) -> dict:
-        record = {"opened": time.monotonic(), "synced": False, "events": []}
+        record = {"opened": time.monotonic(), "synced": False, "events": [], "arrived": [],
+                  "sent": []}
         self.sockets.append(record)
         return record
 
@@ -134,30 +115,36 @@ class SocketLog:
         except ValueError:
             data = None
         record["events"].append((event, data))
+        record["arrived"].append((time.monotonic(), event))
         if event == "sync_state":
             record["synced"] = True
+
+    def _sent(self, record: dict, payload) -> None:
+        match = re.match(r'^42\["([a-z_]+)"', payload) if isinstance(payload, str) else None
+        if match:
+            record["sent"].append((time.monotonic(), match.group(1)))
 
     def events(self, name: str) -> list:
         return [data for s in self.sockets for event, data in s["events"] if event == name]
 
-    async def rejoined(self, page, since: float, grace: float = 3.0) -> None:
-        """Wait until a socket opened after `since` has re-joined its room.
+    def arrived(self, name: str) -> list[float]:
+        """When each `name` event reached the page, over all its sockets."""
+        return sorted(at for s in self.sockets for at, event in s["arrived"] if event == name)
 
-        Needed only because of the pre-existing socket-recreation bug (spec §11, B1): each
-        navigation of the host or player app opens a new socket, and anything emitted before it
-        has re-joined is dropped by the server. This waits for that event rather than a fixed
-        delay; if no new socket opens within `grace` seconds (the bug fixed), it returns — and
-        the B1 known-issue check then reports XPASS.
-        """
-        deadline = time.monotonic() + 15
+    def sent(self, name: str) -> list[float]:
+        """When the page sent each `name` event, over all its sockets (SocketProxy only)."""
+        return sorted(at for s in self.sockets for at, event in s["sent"] if event == name)
+
+    async def rejoined(self, page, since: float, timeout: float = 15.0) -> None:
+        """Wait until a socket opened after `since` — a real reconnect — has re-joined its room
+        (received `sync_state`). Navigation never opens one (B1 is fixed), so this is for
+        dropped connections only."""
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            fresh = [s for s in self.sockets if s["opened"] >= since]
-            if any(s["synced"] for s in fresh):
-                return
-            if not fresh and time.monotonic() - since > grace:
+            if any(s["synced"] for s in self.sockets if s["opened"] >= since):
                 return
             await page.wait_for_timeout(20)
-        raise AssertionError("A new socket opened but never re-joined its room")
+        raise AssertionError(f"No socket re-joined its room within {timeout}s")
 
 
 class SocketWatch(SocketLog):
@@ -177,13 +164,21 @@ class SocketWatch(SocketLog):
 class SocketProxy(SocketLog):
     """Routes a page's socket.io WebSockets through Playwright, so a check can drop the live
     connection — as a network loss would — without reloading the page. socket.io then
-    reconnects on its own and re-sends `join_room`."""
+    reconnects on its own and re-sends `join_room`. A drop can also keep the page offline
+    (the browser's own offline mode, so every reconnection attempt fails at once) until
+    `release()`. `withhold()` holds back chosen server events from the page — as if they were
+    still on their way — until `deliver_withheld()`. Every event the page sends is recorded
+    (`sent()`) on its way through."""
 
     def __init__(self):
         super().__init__()
         self.routes: list[tuple] = []
+        self.page = None
+        self.withheld_events: set[str] = set()
+        self.withheld: list[tuple] = []
 
     async def attach(self, page) -> None:
+        self.page = page
         await page.route_web_socket(re.compile(r"/socket\.io/"), self._handle)
 
     def _handle(self, ws) -> None:
@@ -191,14 +186,26 @@ class SocketProxy(SocketLog):
         record = self._new()
 
         def from_server(message):
+            event = re.match(r'^42\["([a-z_]+)"', message) if isinstance(message, str) else None
+            if event and event.group(1) in self.withheld_events:
+                self.withheld.append((ws, record, message))
+                return
             self._frame(record, message)
             ws.send(message)
 
-        server.on_message(from_server)  # page → server keeps flowing on its own
+        def from_page(message):  # with a handler set, forwarding is ours to do
+            self._sent(record, message)
+            server.send(message)
+
+        server.on_message(from_server)
+        ws.on_message(from_page)
         self.routes.append((ws, server))
 
-    async def drop(self) -> float:
-        """Close the current connection on both sides; returns when that happened."""
+    async def drop(self, *, hold: bool = False) -> float:
+        """Close the current connection on both sides; returns when that happened. With
+        `hold`, the page stays offline until `release()`."""
+        if hold:
+            await self.page.context.set_offline(True)
         ws, server = self.routes[-1]
         dropped = time.monotonic()
         await ws.close(code=4000, reason="dropped by the browser check")
@@ -206,6 +213,32 @@ class SocketProxy(SocketLog):
         if inspect.isawaitable(closing):
             await closing
         return dropped
+
+    async def release(self) -> float:
+        """Back online: the next reconnection attempt goes through. Returns when."""
+        await self.page.context.set_offline(False)
+        return time.monotonic()
+
+    def withhold(self, *events: str) -> None:
+        self.withheld_events = set(events)
+
+    def deliver_withheld(self) -> None:
+        """Stop withholding, and deliver what was held back, in order."""
+        self.withheld_events = set()
+        for ws, record, message in self.withheld:
+            self._frame(record, message)
+            ws.send(message)
+        self.withheld.clear()
+
+    def attempts_since(self, since: float) -> int:
+        """Connection attempts the page made after `since` (failed ones included)."""
+        return sum(1 for s in self.sockets if s["opened"] >= since)
+
+    def send_as_page(self, event: str, data) -> None:
+        """Send an event to the server on the page's current connection, as the page's own
+        code would (the server can't tell the difference)."""
+        _ws, server = self.routes[-1]
+        server.send("42" + json.dumps([event, data]))
 
 
 # ---------------------------------------------------------------------------
@@ -242,17 +275,14 @@ def file_payload(name: str, data: bytes) -> dict:
 
 
 class Api:
-    """REST setup through nginx, as the admin. Everything it creates is deleted by cleanup()."""
+    """REST setup through nginx, as the admin. Everything it creates goes into the run's
+    ownership ledger the moment it exists, and cleanup() deletes exactly that."""
 
-    def __init__(self):
-        username, password = admin_credentials()
+    def __init__(self, ledger: Ledger | None = None):
         self.http = httpx.Client(base_url=BASE, timeout=120.0)
-        r = self.http.post("/api/auth/login", json={"username": username, "password": password})
-        r.raise_for_status()
-        self.token = r.json()["access_token"]
+        self.token = admin_login(self.http)
         self.tag = uuid.uuid4().hex[:6]
-        self.game_ids: list[int] = []
-        self.session_ids: list[str] = []
+        self.ledger = ledger or Ledger.begin(LEDGERS, pathlib.Path(sys.argv[0]).stem, base_url=BASE)
 
     def req(self, method: str, path: str, **kw) -> httpx.Response:
         return self.http.request(method, path, headers={"Authorization": f"Bearer {self.token}"}, **kw)
@@ -262,11 +292,19 @@ class Api:
         assert r.status_code == status, f"{method} {path}: {r.status_code} {r.text}"
         return r.json() if r.content else {}
 
+    def course(self, name: str, semester: str = SEMESTER) -> int:
+        course = self.ok("POST", "/api/admin/courses", 201, json={"name": name, "semester": semester})
+        self.ledger.record("courses", id=course["id"], name=course["name"], semester=course["semester"])
+        return course["id"]
+
+    def game(self, course_id: int, title: str, **extra) -> int:
+        game = self.ok("POST", "/api/admin/games", 201, json={"title": title, "course_id": course_id, **extra})
+        self.ledger.record("games", id=game["id"], title=game["title"])
+        return game["id"]
+
     def setup_game(self, title: str) -> tuple[int, int]:
-        course = self.ok("POST", "/api/admin/courses", 201, json={"name": f"BC {title} {self.tag}", "semester": "T7 checks"})
-        game = self.ok("POST", "/api/admin/games", 201, json={"title": f"{title} {self.tag}", "course_id": course["id"]})
-        self.game_ids.append(game["id"])
-        return course["id"], game["id"]
+        course_id = self.course(f"BC {title} {self.tag}")
+        return course_id, self.game(course_id, f"{title} {self.tag}")
 
     def upload(self, game_id: int, data: bytes, description: str, filename: str = "image.png") -> dict:
         r = self.req("POST", f"/api/host/games/{game_id}/images",
@@ -290,25 +328,33 @@ class Api:
 
     def room(self, course_id: int, game_id: int) -> tuple[str, str]:
         data = self.ok("POST", "/api/game/rooms", 201, json={"course_id": course_id, "game_id": game_id})
-        self.session_ids.append(data["session_id"])
+        self.ledger.record("sessions", id=data["session_id"], room_code=data["room_code"])
         return data["room_code"], data["session_id"]
 
     def guest(self, room_code: str, name: str) -> str:
-        r = self.http.post("/api/auth/guest", json={
-            "display_name": name, "email": f"{name.lower()}.{uuid.uuid4().hex[:6]}@example.com", "room_code": room_code})
+        # A minted email (tests/ledger.py): no account can already have it, so the guest the
+        # server returns is this run's own, and only that makes it deletable.
+        email = self.ledger.mint_guest_email(name)
+        r = self.http.post("/api/auth/guest", json={"display_name": name, "email": email, "room_code": room_code})
         r.raise_for_status()
-        return r.json()["access_token"]
+        token = r.json()["access_token"]
+        self.ledger.record("guests", id=token_subject(token), email=email, owned=True)
+        return token
 
     def report(self, session_id: str) -> str:
         r = self.req("GET", f"/api/host/sessions/{session_id}/report")
         assert r.status_code == 200, r.text
         return r.text
 
-    def cleanup(self) -> None:
-        for session_id in self.session_ids:
-            self.req("DELETE", f"/api/game/sessions/{session_id}")
-        for game_id in self.game_ids:
-            self.req("DELETE", f"/api/admin/games/{game_id}")
+    def cleanup(self) -> list[str]:
+        """Delete everything this run recorded. Anything that couldn't be deleted stays in the
+        ledger, for `tests/cleanup.py`, and is printed."""
+        problems = teardown(self.ledger, self.http, self.token)
+        if problems:
+            print(f"\nCleanup kept {len(problems)} record(s); ledger: {self.ledger.path}")
+            for problem in problems:
+                print(f"  {problem}")
+        return problems
 
 
 def stamp(image_id: int, version: int, cols: int, rows: int) -> dict:
@@ -414,20 +460,12 @@ async def until(page, check, *, timeout: float = 10.0, what: str = "the conditio
 
 
 class Host:
-    """The projector page. Each click on a control that navigates (Start, Show Results, Next,
-    Show Final Results) re-creates the host socket (pre-existing bug B1), so the next click
-    waits until that socket has re-joined — an event, not a fixed delay."""
+    """The projector page, with its sockets observed. A click never waits for a re-join: the
+    projector keeps one socket across its screens."""
 
     def __init__(self, page):
         self.page = page
         self.sockets = SocketWatch(page)
-        self.last_navigation: float | None = None
 
-    async def click(self, name: str, *, navigates: bool = True) -> float:
-        if self.last_navigation is not None:
-            await self.sockets.rejoined(self.page, self.last_navigation)
-        since = now()
+    async def click(self, name: str) -> None:
         await self.page.get_by_role("button", name=name).click()
-        if navigates:
-            self.last_navigation = since
-        return since

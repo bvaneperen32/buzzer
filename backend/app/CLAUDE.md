@@ -184,13 +184,14 @@ a plain string, and every client has a silent fallback for an unknown type.
   but Spot It, `option_images` only on `multiple_choice` / `multi_select`, and `image_id` only on
   `find_in_image`, where it's required. A type whose options can be images must be added to
   `_IMAGE_OPTION_TYPES` *and* rendered by both apps' option-image code.
-- `services/game_service.py` — `calculate_score`, `record_answer`'s distribution key,
+- `services/game_service.py` — `calculate_score`, `answer_dist_keys` (the live distribution key),
   `get_player_question_summary`'s reveal, and `get_host_question_summary` (twice: its reveal *and*
   its distribution rebuild).
 - `websocket/gateway.py` — `_answer_reveal`; `_question_payload` if the client needs extra
   non-revealing fields (as fill-in-the-blank needs `editDistance`, and Sort It `cardOrder`); and
   `on_submit_answer` if the answer shape needs validating (`multi_select` and both T7 types have
-  checks). T7 also added per-player `question_results` fields for its types only.
+  checks). T7 also added per-player `question_results` fields for its types only (and
+  `answered` now goes to every type).
 - `services/report_service.py` — `_answer_reveal`, `_extract_answer_key`, the type-badge map (and
   its CSS class), and the chart dispatch in `build_session_report` (T7's types render through
   their own pure renderers, `_render_sort_table` and `_render_spot_svg`, escaping every author
@@ -213,10 +214,13 @@ a plain string, and every client has a silent fallback for an unknown type.
 
 Three separate mechanisms silently assume one worker process:
 
-- **Gateway bookkeeping.** `_sid_ctx`, `_timer_tasks`, and `_abandon_tasks` are module-level
-  dicts. Across processes this produces a real failure, not just inefficiency: a host who
-  reconnects to a different process leaves the original process's abandon task running, which
-  then abandons a game that has a live host. Detail in
+- **Gateway bookkeeping.** `_sid_ctx`, `_timer_tasks`, `_abandon_tasks`,
+  `_host_presence_locks`, `_answer_turns`, `_answers_in_flight` and `_results_building` are
+  module-level state. Across
+  processes this produces real failures, not just inefficiency: a host who reconnects to a
+  different process leaves the original process's abandon task running, which then abandons a
+  game that has a live host; and a player's retried answer on another process isn't serialized
+  with the first attempt, so it can be recorded twice. Detail in
   [websocket/CLAUDE.md](websocket/CLAUDE.md).
 - **Rate limiting.** slowapi defaults to in-memory storage — counters are per-process and reset on
   restart.
@@ -263,10 +267,14 @@ Running more than one uvicorn worker requires addressing all three.
   it. Games that predate `004` are unassigned (NULL): invisible to hosts and unrunnable by anyone
   until an admin assigns a course, since a room's course must equal its game's.
 - **Nothing in MySQL prevents double-scoring.** `session_scores` has no unique constraint on
-  (session, user, question). The only guard is the gateway's Redis `has_answered` check, a
-  separate read before `record_answer` writes — not atomic. A double-submit race, or losing the
-  Redis `answered` set, can insert duplicate rows, and the "authoritative" MySQL leaderboard then
-  counts them. Guest merge can produce the same duplicates.
+  (session, user, question). The guard is the gateway's, and per-process.
+  - One player's attempts at a question run one at a time.
+  - Each is acknowledged again if the Redis `answered` set already has it, and looks for a stored
+    row before recording (`record_answer` commits the row before counting it in Redis).
+  - A retry after a reconnect therefore can't insert a duplicate (it used to: the race was
+    reproduced, `docs/plans/fix-live-session-test-cleanup.md` §3.13).
+  - More than one worker process, or a guest merge, can still produce duplicate rows, and the
+    "authoritative" MySQL leaderboard then counts them.
 - `Question.type` is an unconstrained `String(50)`; the allowlist exists only in Pydantic.
 
 ### Redis lifecycle

@@ -284,15 +284,16 @@ function buildBars(
 // ---------------------------------------------------------------------------
 
 export default function ResultsPage() {
-  const { questionResults, currentQuestion, autoAdvance, emitAdvance, imageLinks, refreshImageLinks, imageLinksFailed } = useGame();
+  const { questionResults, currentQuestion, autoAdvance, canControl, emitAdvance, imageLinks, refreshImageLinks, imageLinksFailed } = useGame();
   const [countdown, setCountdown] = useState(RESULTS_DISPLAY_SECONDS);
 
   const isLast = currentQuestion
     ? currentQuestion.questionNumber >= currentQuestion.totalQuestions
     : false;
 
+  // The countdown runs only while the controls work; a reconnect starts it again from the top.
   useEffect(() => {
-    if (!autoAdvance) return;
+    if (!autoAdvance || !canControl) return;
     setCountdown(RESULTS_DISPLAY_SECONDS);
     const interval = setInterval(() => {
       setCountdown(prev => {
@@ -301,7 +302,7 @@ export default function ResultsPage() {
       });
     }, 1000);
     return () => clearInterval(interval);
-  }, [autoAdvance, questionResults, emitAdvance]);
+  }, [autoAdvance, canControl, questionResults, emitAdvance]);
 
   const isFitb = currentQuestion?.type === 'fill_in_the_blank';
   const isSort = currentQuestion?.type === 'sort_into_boxes';
@@ -420,7 +421,7 @@ export default function ResultsPage() {
       ) : null}
 
       <div className="flex flex-col items-center gap-2">
-        <Button size="lg" onClick={emitAdvance} className="px-10">
+        <Button size="lg" onClick={emitAdvance} disabled={!canControl} className="px-10">
           {isLast ? 'Show Final Results' : 'Next Question'}
         </Button>
         {autoAdvance && (

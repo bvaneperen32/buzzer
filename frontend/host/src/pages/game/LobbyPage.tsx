@@ -4,7 +4,7 @@ import { useGame } from './GameLayout';
 import { Button } from '../../components/ui/button';
 
 export default function LobbyPage() {
-  const { roomCode, gameTitle, playerCount, emitAdvance, autoAdvance, setAutoAdvance } = useGame();
+  const { roomCode, gameTitle, playerCount, canControl, emitAdvance, autoAdvance, setAutoAdvance } = useGame();
 
   const playerJoinUrl = `${window.location.origin}/player/join?code=${roomCode}`;
 
@@ -58,7 +58,7 @@ export default function LobbyPage() {
       </button>
 
       {/* Start button */}
-      <Button size="lg" onClick={emitAdvance} disabled={playerCount === 0} className="px-12">
+      <Button size="lg" onClick={emitAdvance} disabled={playerCount === 0 || !canControl} className="px-12">
         {playerCount === 0 ? 'Waiting for players…' : 'Start Game'}
       </Button>
     </div>

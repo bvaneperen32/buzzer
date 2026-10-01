@@ -91,8 +91,11 @@ realize these models live in [migrations/versions/](../migrations/versions/).
   callers that omit it admit guests.
 - **`SessionScore` has no unique constraint on (`session_id`, `user_id`, `question_id`)** — only a
   non-unique index on (`session_id`, `user_id`). Nothing in the schema stops a player being scored
-  twice for one question; the only guard is a non-atomic Redis check in the gateway. The
-  leaderboard, exports, and report all aggregate `session_scores` and will count duplicates.
+  twice for one question. The guard is the gateway's: one player's attempts at a question run
+  one at a time, and each looks for a counted answer or a stored row first (per-process, like
+  the rest of its bookkeeping — see [websocket/CLAUDE.md](../websocket/CLAUDE.md)). Guest merge
+  can still produce duplicates. The leaderboard, exports, and report all aggregate
+  `session_scores` and will count them.
 - **`User.email` is UNIQUE, and guests are identified by email.** A guest row holding a student's
   address blocks creating their real account with the same email — see
   [services/CLAUDE.md](../services/CLAUDE.md).

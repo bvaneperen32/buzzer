@@ -1375,6 +1375,9 @@ async def test_spot_it_gameplay(t7):
 # Self-contained results and image isolation (spec §2.7)
 # ---------------------------------------------------------------------------
 
+# Every type's per-player results. `answered` joined them after T7, when the phone's "No answer"
+# moved to the server's record for every type (docs/plans/fix-live-session-test-cleanup.md §3.14);
+# a T7 payload's fields as a whole are unchanged.
 EXISTING_RESULT_FIELDS = {
     "questionId",
     "answerReveal",
@@ -1382,12 +1385,12 @@ EXISTING_RESULT_FIELDS = {
     "yourScore",
     "yourRank",
     "playerCount",
+    "answered",
 }
 T7_RESULT_FIELDS = {
     "questionType",
     "gradingType",
     "pointsValue",
-    "answered",
     "yourAnswer",
     "yourIsCorrect",
 }
@@ -1443,10 +1446,11 @@ async def test_self_contained_results(t7):
                 assert result["yourAnswer"] == sent
                 assert result["yourIsCorrect"] is correct
                 assert result["yourPoints"] == pytest.approx(points)
-        # Other types' results are unchanged.
+        # Other types' results carry none of T7's fields; nobody answered this one.
         await advance_to_question(host, players)
         _, results = await show_results(host, players)
         assert all(set(result) == EXISTING_RESULT_FIELDS for result in results)
+        assert [result["answered"] for result in results] == [False, False, False]
         assert tf_q == results[0]["questionId"]
     finally:
         await t7.close_sockets()
@@ -1641,11 +1645,22 @@ class Boundary:
         return image, qid
 
     def reconfirm(self, image_id: int, qid: int, version: int) -> httpx.Response:
-        return self.t7.put_question(
+        """Reconfirm the question. An accepted update commits only after its response, and
+        set_headroom sizes the padding from a meter read, so this returns only once the
+        question reads back as the response stored it: the meter then includes the change.
+        (Without this, a meter read could miss the "confirmed" bytes and size the padding
+        that many bytes too long.)"""
+        r = self.t7.put_question(
             self.game_id,
             qid,
             {"answer_data": {"accepted_cells": [cell(1, 1)], "confirmed_for": stamp(image_id, version, 6, 6)}},
         )  # fmt: skip
+        if r.status_code == 200:
+            wait_until(
+                lambda: self.t7.question(self.game_id, qid) == r.json(),
+                what="the reconfirmation",
+            )
+        return r
 
 
 def test_export_size_boundary(t7):
