@@ -24,7 +24,7 @@ interface Game {
 interface GameGroup { key: string; label: string; games: Game[] }
 
 const selectClass =
-  'w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500';
+  'w-full rounded-lg border border-input bg-raised px-3 py-2 text-primary focus-visible:border-accent';
 
 /**
  * Group by course id, not name: same-name courses in different semesters stay separate. Groups
@@ -206,7 +206,7 @@ export default function GamesPage() {
   return (
     <div className="p-8 max-w-4xl">
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold text-slate-100">Games</h2>
+        <h2 className="text-2xl font-bold text-primary">Games</h2>
         {!noCourses && (
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => setShowImport(!showImport)}>
@@ -219,14 +219,14 @@ export default function GamesPage() {
         )}
       </div>
 
-      {error && <p className="text-red-400 mb-4 text-sm">{error}</p>}
+      {error && <p className="text-danger mb-4 text-sm">{error}</p>}
 
       {showImport && !noCourses && (
         <Card className="mb-6">
-          <CardHeader><h3 className="text-lg font-semibold text-slate-100">Import Game</h3></CardHeader>
+          <CardHeader><h3 className="text-lg font-semibold text-primary">Import Game</h3></CardHeader>
           <CardContent className="space-y-3">
             <div>
-              <label className="block text-xs text-slate-400 mb-1">Course</label>
+              <label className="block text-xs text-secondary mb-1">Course</label>
               <select
                 value={importCourseId}
                 onChange={(e) => setImportCourseId(e.target.value === '' ? '' : Number(e.target.value))}
@@ -250,11 +250,11 @@ export default function GamesPage() {
 
       {showForm && !noCourses && (
         <Card className="mb-6">
-          <CardHeader><h3 className="text-lg font-semibold text-slate-100">Create Game</h3></CardHeader>
+          <CardHeader><h3 className="text-lg font-semibold text-primary">Create Game</h3></CardHeader>
           <CardContent>
             <form onSubmit={handleCreate} className="space-y-3">
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Course</label>
+                <label className="block text-xs text-secondary mb-1">Course</label>
                 <select
                   value={courseId}
                   onChange={(e) => setCourseId(e.target.value === '' ? '' : Number(e.target.value))}
@@ -270,11 +270,11 @@ export default function GamesPage() {
                 placeholder="Description (optional)"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none"
+                className="w-full rounded-lg border border-input bg-raised px-3 py-2 text-primary placeholder:text-secondary focus-visible:border-accent resize-none"
                 rows={3}
               />
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Max players</label>
+                <label className="block text-xs text-secondary mb-1">Max players</label>
                 <Input
                   type="number"
                   value={maxPlayers}
@@ -294,7 +294,7 @@ export default function GamesPage() {
 
       {editingGame && (
         <Card className="mb-6">
-          <CardHeader><h3 className="text-lg font-semibold text-slate-100">Edit Game</h3></CardHeader>
+          <CardHeader><h3 className="text-lg font-semibold text-primary">Edit Game</h3></CardHeader>
           <CardContent>
             <form onSubmit={handleEdit} className="space-y-3">
               <Input placeholder="Title" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} required />
@@ -302,11 +302,11 @@ export default function GamesPage() {
                 placeholder="Description (optional)"
                 value={editDescription}
                 onChange={(e) => setEditDescription(e.target.value)}
-                className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none"
+                className="w-full rounded-lg border border-input bg-raised px-3 py-2 text-primary placeholder:text-secondary focus-visible:border-accent resize-none"
                 rows={3}
               />
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Max players</label>
+                <label className="block text-xs text-secondary mb-1">Max players</label>
                 <Input
                   type="number"
                   value={editMaxPlayers}
@@ -325,26 +325,26 @@ export default function GamesPage() {
       )}
 
       {loading ? (
-        <p className="text-slate-400">Loading…</p>
+        <p className="text-secondary">Loading…</p>
       ) : games.length === 0 ? (
         noCourses ? (
-          <p className="text-slate-400">You don't host any courses yet — ask an administrator for HOST access.</p>
+          <p className="text-secondary">You don't host any courses yet — ask an administrator for HOST access.</p>
         ) : (
-          <p className="text-slate-400">No games yet.</p>
+          <p className="text-secondary">No games yet.</p>
         )
       ) : (
         <div className="space-y-8">
           {groupByCourse(games).map((group) => (
             <section key={group.key}>
-              <h3 className="text-lg font-semibold text-slate-200 mb-3">{group.label}</h3>
+              <h3 className="text-lg font-semibold text-primary mb-3">{group.label}</h3>
               <div className="space-y-3">
                 {group.games.map((g) => (
                   <Card key={g.id} className="px-6 py-4">
                     <div className="flex items-center justify-between gap-4">
                       <div className="min-w-0">
-                        <p className="font-semibold text-slate-100">{g.title}</p>
-                        {g.description && <p className="text-slate-400 text-sm mt-0.5 line-clamp-1">{g.description}</p>}
-                        <p className="text-slate-500 text-xs mt-0.5">Max {g.max_players} players</p>
+                        <p className="font-semibold text-primary">{g.title}</p>
+                        {g.description && <p className="text-secondary text-sm mt-0.5 line-clamp-1">{g.description}</p>}
+                        <p className="text-secondary text-xs mt-0.5">Max {g.max_players} players</p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         {isAdmin && (
@@ -354,7 +354,7 @@ export default function GamesPage() {
                               const next = Number(e.target.value);
                               if (next !== g.course_id) void moveGame(g.id, next);
                             }}
-                            className="rounded-lg border border-slate-600 bg-slate-800 px-2 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            className="rounded-lg border border-input bg-raised px-2 py-1.5 text-sm text-primary focus-visible:border-accent"
                           >
                             {/* A course can be set or changed, never cleared. */}
                             {g.course_id === null && <option value="" disabled>Assign a course…</option>}
@@ -376,7 +376,7 @@ export default function GamesPage() {
                     </div>
                     {isAdmin && confirmDelete === g.id && (
                       <div className="flex items-center justify-end gap-2 mt-3">
-                        <span className="text-red-400 text-xs">
+                        <span className="text-danger text-xs">
                           This erases every session and score ever recorded for this game.
                         </span>
                         <Button size="sm" variant="destructive" onClick={() => void deleteGame(g.id)}>

@@ -84,24 +84,24 @@ export default function HomePage() {
   return (
     <div className="p-8 flex flex-col gap-4">
       {activeSessions.length > 0 && (
-        <Card className="w-full max-w-lg border-amber-500/40">
+        <Card className="w-full max-w-lg border-warning">
           <CardHeader>
-            <h2 className="text-lg font-semibold text-amber-400">Active Sessions</h2>
-            <p className="text-slate-400 text-sm">You have running games — rejoin one or create a new room below.</p>
+            <h2 className="text-lg font-semibold text-warning">Active Sessions</h2>
+            <p className="text-secondary text-sm">You have running games — rejoin one or create a new room below.</p>
           </CardHeader>
           <CardContent className="space-y-2">
             {activeSessions.map(s => (
               <div
                 key={s.session_id}
-                className="flex items-center justify-between rounded-lg bg-slate-800 border border-slate-700 px-4 py-3"
+                className="flex items-center justify-between rounded-lg bg-raised border border-subtle px-4 py-3"
               >
                 <div>
-                  <p className="text-slate-100 font-medium">{s.game_title}</p>
-                  <p className="text-slate-400 text-sm">{s.course_name} ({s.course_semester})</p>
-                  <p className="text-slate-500 text-xs mt-0.5">
-                    Room <span className="font-mono text-slate-300">{s.room_code}</span>
+                  <p className="text-primary font-medium">{s.game_title}</p>
+                  <p className="text-secondary text-sm">{s.course_name} ({s.course_semester})</p>
+                  <p className="text-secondary text-xs mt-0.5">
+                    Room <span className="font-mono text-secondary">{s.room_code}</span>
                     {' · '}
-                    <span className={s.status === 'IN_PROGRESS' ? 'text-green-400' : 'text-amber-400'}>
+                    <span className={s.status === 'IN_PROGRESS' ? 'text-success' : 'text-warning'}>
                       {s.status === 'IN_PROGRESS' ? 'In Progress' : 'Lobby'}
                     </span>
                   </p>
@@ -109,7 +109,7 @@ export default function HomePage() {
                 <div className="flex items-center gap-2 shrink-0">
                   {confirmDelete === s.session_id ? (
                     <>
-                      <span className="text-red-400 text-xs">Delete all data?</span>
+                      <span className="text-danger text-xs">Delete all data?</span>
                       <Button size="sm" variant="destructive" onClick={() => deleteSession(s.session_id)}>
                         Confirm
                       </Button>
@@ -136,22 +136,22 @@ export default function HomePage() {
 
       <Card className="w-full max-w-lg">
         <CardHeader>
-          <h1 className="text-2xl font-bold text-slate-100">Create Game Room</h1>
-          <p className="text-slate-400 text-sm mt-1">Select a course and quiz to begin</p>
+          <h1 className="text-2xl font-bold text-primary">Create Game Room</h1>
+          <p className="text-secondary text-sm mt-1">Select a course and quiz to begin</p>
         </CardHeader>
         <CardContent className="space-y-4">
           {noCourses ? (
-            <p className="text-slate-400 text-sm">
+            <p className="text-secondary text-sm">
               You don't host any courses yet — ask an administrator for HOST access.
             </p>
           ) : (
             <>
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">Course</label>
+                <label className="block text-sm font-medium text-secondary mb-1">Course</label>
                 <select
                   value={courseId}
                   onChange={e => pickCourse(e.target.value === '' ? '' : Number(e.target.value), games)}
-                  className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full rounded-lg border border-input bg-raised px-3 py-2 text-primary focus-visible:border-accent"
                 >
                   <option value="">Select a course…</option>
                   {courses.map(c => (
@@ -160,12 +160,12 @@ export default function HomePage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1">Quiz</label>
+                <label className="block text-sm font-medium text-secondary mb-1">Quiz</label>
                 <select
                   value={gameId}
                   onChange={e => setGameId(e.target.value === '' ? '' : Number(e.target.value))}
                   disabled={!courseId}
-                  className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                  className="w-full rounded-lg border border-input bg-raised px-3 py-2 text-primary focus-visible:border-accent disabled:opacity-50"
                 >
                   <option value="">Select a quiz…</option>
                   {courseGames.map(g => (
@@ -173,24 +173,24 @@ export default function HomePage() {
                   ))}
                 </select>
                 {courseId !== '' && courseGames.length === 0 && (
-                  <p className="text-slate-400 text-sm mt-2">
+                  <p className="text-secondary text-sm mt-2">
                     No games in this course yet — create or import one on the{' '}
-                    <Link to="/games" className="text-indigo-400 underline">Games page</Link>.
+                    <Link to="/games" className="text-accent underline">Games page</Link>.
                   </p>
                 )}
               </div>
-              <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer select-none">
+              <label className="flex items-center gap-2 text-sm text-secondary cursor-pointer select-none">
                 <input
                   type="checkbox"
                   checked={allowGuests}
                   onChange={e => setAllowGuests(e.target.checked)}
-                  className="rounded border-slate-600 bg-slate-800 accent-indigo-500"
+                  className="rounded border-input bg-raised accent-primary"
                 />
                 Allow guests
               </label>
             </>
           )}
-          {error && <p className="text-red-400 text-sm">{error}</p>}
+          {error && <p className="text-danger text-sm">{error}</p>}
           {!noCourses && (
             <Button
               className="w-full"

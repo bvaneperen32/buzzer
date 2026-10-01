@@ -9,16 +9,8 @@ import {
   rectAttribute,
   type Grid,
 } from '../lib/spotGrid';
-import {
-  CANVAS_BACKGROUND,
-  CELL_TEXT,
-  GRID_DARK,
-  GRID_LIGHT,
-  HEADER_TEXT,
-  SELECTED_EDGE,
-  SELECTED_FILL,
-  SELECTED_TEXT,
-} from '../lib/canvasColors';
+import { canvasColors } from '../lib/canvasColors';
+import { observeTheme } from '../../../shared/theme/theme';
 
 /** Header bands on the phone (column letters on top, row numbers on the left), CSS px. */
 const BAND = 20;
@@ -69,6 +61,9 @@ export function SpotCanvas({ grid: gridProp, width, height, disabled, onLockIn }
   const [layout, setLayout] = useState(() => layoutCanvas(0, 0, BAND, width, height));
   const [landscape, setLandscape] = useState(false);
   const dragging = useRef<number | null>(null);
+  // Colours are read from the theme at draw time, so a theme change must redraw.
+  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme);
+  useEffect(() => observeTheme(setTheme), []);
 
   useLayoutEffect(() => {
     const wrap = wrapRef.current;
@@ -107,16 +102,17 @@ export function SpotCanvas({ grid: gridProp, width, height, disabled, onLockIn }
     if (!ctx || rect.w <= 0 || rect.h <= 0) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssWidth, cssHeight);
-    ctx.fillStyle = CANVAS_BACKGROUND;
+    const colors = canvasColors();
+    ctx.fillStyle = colors.background;
     ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
 
     if (selected) {
       const r = cellRect(rect, grid, selected);
-      ctx.fillStyle = SELECTED_FILL;
+      ctx.fillStyle = colors.selectedFill;
       ctx.fillRect(r.x, r.y, r.w, r.h);
     }
 
-    for (const line of [GRID_DARK, GRID_LIGHT]) {
+    for (const line of [colors.gridDark, colors.gridLight]) {
       ctx.strokeStyle = line.color;
       ctx.lineWidth = line.width;
       ctx.beginPath();
@@ -142,23 +138,23 @@ export function SpotCanvas({ grid: gridProp, width, height, disabled, onLockIn }
       for (let r = 0; r < grid.rows; r++) {
         for (let c = 0; c < grid.cols; c++) {
           const isSelected = selected?.col === c && selected?.row === r;
-          ctx.fillStyle = isSelected ? SELECTED_TEXT : CELL_TEXT;
+          ctx.fillStyle = isSelected ? colors.selectedText : colors.cellText;
           ctx.fillText(cellLabel({ col: c, row: r }), rect.x + w * (c + 0.5), rect.y + h * (r + 0.5));
         }
       }
     }
     if (selected) {
       const r = cellRect(rect, grid, selected);
-      ctx.strokeStyle = SELECTED_EDGE;
+      ctx.strokeStyle = colors.selectedEdge;
       ctx.lineWidth = 3;
       ctx.strokeRect(r.x + 1.5, r.y + 1.5, r.w - 3, r.h - 3);
     }
 
     ctx.font = '700 12px ui-sans-serif, system-ui, sans-serif';
-    ctx.fillStyle = HEADER_TEXT;
+    ctx.fillStyle = colors.headerText;
     for (let c = 0; c < grid.cols; c++) ctx.fillText(String.fromCharCode(65 + c), rect.x + w * (c + 0.5), BAND / 2);
     for (let r = 0; r < grid.rows; r++) ctx.fillText(String(r + 1), BAND / 2, rect.y + h * (r + 0.5));
-  }, [layout, dpr, grid, selected]);
+  }, [layout, dpr, grid, selected, theme]);
 
   function selectAt(e: PointerEvent<HTMLCanvasElement>) {
     const box = e.currentTarget.getBoundingClientRect();
@@ -214,7 +210,7 @@ export function SpotCanvas({ grid: gridProp, width, height, disabled, onLockIn }
 
   const smallest = Math.min(cellW, cellH);
   const nudgeClass =
-    'h-11 w-11 shrink-0 rounded-xl bg-slate-700 text-xl font-bold text-slate-100 active:scale-95 disabled:opacity-40';
+    'h-11 w-11 shrink-0 rounded-xl bg-raised text-xl font-bold text-primary active:scale-95 disabled:opacity-40';
 
   return (
     <div className="flex flex-col gap-3">
@@ -223,7 +219,7 @@ export function SpotCanvas({ grid: gridProp, width, height, disabled, onLockIn }
         <canvas
           ref={canvasRef}
           style={{ width: layout.cssWidth, height: layout.cssHeight, touchAction: 'none' }}
-          className={`rounded-lg focus:outline-none focus-visible:ring-4 focus-visible:ring-indigo-400 ${disabled ? 'opacity-60' : ''}`}
+          className={`rounded-lg ${disabled ? 'opacity-60' : ''}`}
           tabIndex={0}
           role="application"
           aria-label={`Grid of ${grid.cols} columns by ${grid.rows} rows. Use the arrow keys to choose a cell, then Enter to lock it in.`}
@@ -240,11 +236,11 @@ export function SpotCanvas({ grid: gridProp, width, height, disabled, onLockIn }
       </div>
 
       {landscape && smallest > 0 && smallest < TINY_CELL && (
-        <p className="text-center text-sm text-amber-300">Turn your phone upright for a bigger grid</p>
+        <p className="text-center text-sm text-warning">Turn your phone upright for a bigger grid</p>
       )}
 
       <div className="flex items-center justify-between gap-2">
-        <p className="min-w-0 text-base font-semibold text-slate-200" aria-live="polite" data-selected={selected ? cellLabel(selected) : ''}>
+        <p className="min-w-0 text-base font-semibold text-primary" aria-live="polite" data-selected={selected ? cellLabel(selected) : ''}>
           {selected ? (
             <>
               Selected: {cellLabel(selected)}
@@ -266,7 +262,7 @@ export function SpotCanvas({ grid: gridProp, width, height, disabled, onLockIn }
         type="button"
         disabled={disabled || !selected}
         onClick={() => selected && onLockIn(selected)}
-        className="w-full rounded-2xl py-5 text-white font-black text-2xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+        className="w-full rounded-2xl py-5 text-on-accent font-black text-2xl bg-accent hover:bg-accent-hover active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
       >
         {selected ? `Lock in ${cellLabel(selected)}` : 'Lock in'}
       </button>

@@ -10,14 +10,25 @@ image components (T8).
 
 `ui/`:
 
-- `button.tsx` — `Button`. Four variants (`default`, `outline`, `ghost`, `destructive`) and three
-  sizes (`sm`, `md`, `lg`), composed through `cn` so `className` overrides cleanly. Spreads the
-  rest of the native button props.
-- `card.tsx` — `Card`, `CardHeader`, `CardContent`. Dark slate panel with a border and shadow.
-- `input.tsx` — `Input`. A styled native input; props pass straight through.
+- `button.tsx` — `Button`. Four variants and three sizes (`sm`, `md`, `lg`), composed through `cn`
+  so `className` overrides cleanly. Spreads the rest of the native button props. Variants in
+  token classes: `default` solid `bg-accent`, `outline` a `border-input` border with a hover fill,
+  `ghost` `text-secondary` with a hover fill, `destructive` solid `bg-danger`. No focus classes;
+  focus is the global outline from `base.css`.
+- `card.tsx` — `Card`, `CardHeader`, `CardContent`. A `bg-surface` panel with a `border-subtle`
+  edge and a shadow.
+- `input.tsx` — `Input`. A styled native input (`bg-raised`, `border-input`, accent border on
+  focus); props pass straight through.
 - `TimerBar.tsx` — the countdown bar. Takes `totalSeconds`, optional `initialSeconds` (for
-  resuming mid-question after a reconnect), and `paused`. Renders a proportional bar that shifts
-  green → yellow → red at 60% and 30% remaining, with the integer seconds beside it.
+  resuming mid-question after a reconnect), and `paused`. Renders a proportional bar on a
+  `bg-meter-track` that shifts `meter-success` → `meter-warning` → `meter-danger` at 60% and 30%
+  remaining, with the integer seconds beside it. In light the warning fill is a deep ochre, not
+  yellow: bright yellow can't reach 3:1 on a light track, and the seconds number is the main cue.
+- `ThemeToggle.tsx` (T9) — the light/dark switch, a round 40px button fixed top-right. It wraps
+  the shared `theme.ts` with key `buzzer-theme-host`, which must match the `index.html` script.
+  `<html data-theme>` is the source of truth; its state only picks the icon and label. A click
+  must update that state itself, because the `storage` event never fires in the tab that wrote
+  the key.
 - `SafeImage.tsx` (T8) — every image the host app shows. A loading placeholder, then the spec's
   failure sequence: on the first error `await refresh()` (if given) and retry once by remounting
   the element with the current `src`; on the second, "Image unavailable" with the description,
@@ -26,7 +37,11 @@ image components (T8).
   placeholder straight away (a link that couldn't be fetched), and a link that arrives later
   still loads. `compact` is for thumbnails too small for words: the placeholder is an icon whose
   accessible name and tooltip carry "Image unavailable" and the description, and with
-  `showRetry` the whole box is the Retry button.
+  `showRetry` the whole box is the Retry button. **Contained images are shrink-wrapped** (T9):
+  the wrapper centres a `max-h-full max-w-full` `<img>` rather than using `object-contain`, so the
+  light `bg-media` sits only behind the picture's own pixels. The empty bands show the themed
+  `bg-raised` frame, never light bars in dark. `fit="cover"` keeps `h-full w-full object-cover`.
+  Trade-off: an image smaller than its box is no longer stretched up to fill it.
 
 `images/` (T8):
 
@@ -49,11 +64,15 @@ will need review.
 - `SpotItCanvas.tsx` — a Spot It grid on a `<canvas>`, in three modes: `question` (the projector's
   full image with a transparent labelled grid), `results` (the heatmap — heat fills, counts,
   "Correct" outlines) and `author` (the editor, where a click or Enter toggles a cell). The backing
-  store follows the device pixel ratio and it redraws on resize, a pixel-ratio change and state
-  change only. Image failures follow T8's sequence (refresh the links, retry once, then "Image
+  store follows the device pixel ratio and it redraws on resize, a pixel-ratio change, a theme
+  change (`observeTheme`) and state change only. Colours come from `lib/canvasColors.ts` at draw
+  time. The grid area and header labels follow the theme; everything drawn over the image (grid
+  lines, heat, counts, outlines, the editor's accepted cells and cursor) uses fixed tokens,
+  because the image looks the same in both themes. Image failures follow T8's sequence (refresh the links, retry once, then "Image
   unavailable — {description}" drawn on the grid with a Retry button); play is never blocked. It
   exposes `data-grid-cols`, `data-grid-rows` and `data-grid-rect` for automated checks. Also
-  `HeatLegend`.
+  `HeatLegend`, whose swatches are the app's only inline colour styles: they reference the same
+  tokens (`rgb(var(--heat-N) / 0.55)`) so they match the canvas exactly.
 - `SortItResults.tsx` — `SortItResults` (the per-card table from `lib/sortResults.ts`, each row
   carrying its numbers as data attributes) and `SortItBoard` (the projector's boxes and cards
   during a question).
@@ -63,7 +82,9 @@ will need review.
 The three primitives are generic and used by every page — the game screens and the management
 pages alike.
 `TimerBar` is game-specific but purely presentational — it receives seconds and a paused flag and
-owns no game state. All styling is Tailwind; there is no CSS module or styled-component here.
+owns no game state. All styling is Tailwind token classes from the shared theme
+([frontend/shared/CLAUDE.md](../../../shared/CLAUDE.md)); there is no CSS module or
+styled-component here.
 
 These components are *dumb by design*: they never read `useGame()`, never call `api`, and never
 navigate. Anything needing game state belongs in [pages/](../pages/CLAUDE.md).
@@ -89,7 +110,8 @@ navigate. Anything needing game state belongs in [pages/](../pages/CLAUDE.md).
   their submit buttons and pass `type="button"` explicitly on Cancel. Omitting it on a new Cancel
   button will submit the form.
 - `Button`, `Card`, and `Input` are byte-identical to the admin app's copies — a fix here needs
-  the same fix in `frontend/admin/src/components/ui/`. `SafeImage` has a deliberately *different*
+  the same fix in `frontend/admin/src/components/ui/`. `ThemeToggle` differs from admin's only in
+  its storage key, and from player's in the key and size. `SafeImage` has a deliberately *different*
   copy in the player app (no refresh, no Retry); don't sync them.
 - **Key a `SafeImage` by image id** wherever the same element could show a different image: its
   retry counter is per instance, and a link change for the *same* image (a refresh) must not reset

@@ -11,6 +11,12 @@ admin has no equivalent of `TimerBar` because nothing here is real-time.
   sizes. **Byte-identical to the host app's copy.**
 - `card.tsx` — `Card`, `CardHeader`, `CardContent`. Byte-identical to the host app's copy.
 - `input.tsx` — `Input`, a styled native input. Byte-identical to the host app's copy.
+- `ThemeToggle.tsx` (T9) — the light/dark switch, fixed top-right. The host's copy with key
+  `buzzer-theme-admin`, which must match the `index.html` script.
+
+`Button`, `Card` and `Input` use the shared theme's token classes (`bg-accent`, `bg-surface`,
+`border-input`, …) and carry no focus classes; see the host's
+[components/CLAUDE.md](../../../host/src/components/CLAUDE.md) for the variant-to-token mapping.
 
 ## How it fits in
 

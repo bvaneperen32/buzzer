@@ -1,3 +1,6 @@
+@import '../../shared/theme/tokens.css';
+@import '../../shared/theme/base.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -8,8 +11,6 @@
 
 body {
   margin: 0;
-  background: #0f172a;
-  color: #f8fafc;
   /* Prevent tap highlight flash on mobile */
   -webkit-tap-highlight-color: transparent;
 }

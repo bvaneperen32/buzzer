@@ -9,14 +9,17 @@ reach from this app's "Host tools" links. It never participates in a live game.
 
 ## Contents
 
-- `index.html` — Vite entry document.
+- `index.html` — Vite entry document. An inline script in `<head>` sets `<html data-theme>`
+  before first paint: the choice stored under `localStorage['buzzer-theme-admin']`, else the OS
+  preference. The key must match `ThemeToggle`'s.
 - `package.json` — React 18 + TypeScript + Vite. The **smallest dependency set** of the three
   apps: no `socket.io-client` (this app is REST-only) and no `qrcode.react`. Just
   `react-router-dom`, `lucide-react`, and `clsx` + `tailwind-merge`.
 - `vite.config.ts` — React plugin; `base` is `/admin/` in production, `/` in dev; dev server on
   **port 5175**. Proxies **only `/api`** — no `/socket.io` entry, because nothing here opens a
   socket.
-- `tailwind.config.ts`, `postcss.config.js` — styling config.
+- `tailwind.config.ts`, `postcss.config.js` — styling config. All colours come from the shared
+  preset (`../shared/theme/preset.js`); the config itself adds only the font stack.
 - `tsconfig.json`, `tsconfig.node.json` — `npm run build` runs `tsc -b` first, so type errors fail
   the build.
 - [`src/`](src/CLAUDE.md) — the application. See that file for architecture and the
@@ -25,8 +28,9 @@ reach from this app's "Host tools" links. It never participates in a live game.
 ## How it fits in
 
 One of three sibling apps under `frontend/` (`host` :5173, `player` :5174, `admin` :5175), built
-independently and served under their own path prefixes. They share no code — `Button`, `Card`,
-`Input`, `cn`, and `api.ts` are duplicated per app. This app's `Button`, `Card`, `Input`, and
+independently and served under their own path prefixes. Apart from the colour theme in
+[`frontend/shared/`](../shared/CLAUDE.md), they share no code — `Button`, `Card`, `Input`, `cn`,
+and `api.ts` are duplicated per app. This app's `Button`, `Card`, `Input`, and
 `cn` are byte-identical to the host's, and its `api.ts` matches the host's in behavior.
 
 This app decides who can do what in the other two: the HOST/PLAYER course grants and game grants
@@ -68,5 +72,8 @@ populated console.
   production build (same origin, same token) and at `http://localhost:5173` in dev (separate
   origin and token, so you sign in again). `VITE_HOST_APP_URL` overrides both. Verify end-to-end
   link behavior under nginx (`:8080`).
-- No tests, no lint config, no CI hook — `tsc -b` at build time is the only automated check.
+- No tests and no lint config. CI runs only `tsc --noEmit`; `tsc -b` at build time is stricter,
+  and `python scripts/check_theme.py` checks colours.
 - Desktop-only by design: fixed sidebar, wide content area, no responsive breakpoints.
+- **Light and dark themes** (T9): the toggle is fixed top-right on every screen, including sign-in
+  and the notices. The main content area has top padding so page headers clear it.

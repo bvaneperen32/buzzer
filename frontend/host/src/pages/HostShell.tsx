@@ -42,8 +42,8 @@ export default function HostShell() {
       <div className="min-h-screen flex items-center justify-center p-4">
         <Card className="w-full max-w-md">
           <CardHeader>
-            <h1 className="text-lg font-semibold text-slate-100">Couldn't load your account.</h1>
-            <p className="text-red-400 text-sm mt-1">{error}</p>
+            <h1 className="text-lg font-semibold text-primary">Couldn't load your account.</h1>
+            <p className="text-danger text-sm mt-1">{error}</p>
           </CardHeader>
           <CardContent>
             <Button onClick={() => void load()}>Retry</Button>
@@ -56,7 +56,7 @@ export default function HostShell() {
   if (!me) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <Loader2 size={24} className="animate-spin text-slate-400" />
+        <Loader2 size={24} className="animate-spin text-secondary" />
       </div>
     );
   }
@@ -68,7 +68,7 @@ export default function HostShell() {
       <div className="min-h-screen flex items-center justify-center p-4">
         <Card className="w-full max-w-md">
           <CardHeader>
-            <p className="text-slate-100">
+            <p className="text-primary">
               You're signed in as a guest. Sign in with a host account to use Buzzer Host.
             </p>
           </CardHeader>
@@ -83,17 +83,17 @@ export default function HostShell() {
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
       isActive
-        ? 'bg-indigo-600 text-white'
-        : 'text-slate-300 hover:bg-slate-700 hover:text-slate-100'
+        ? 'bg-selected text-primary'
+        : 'text-secondary hover:bg-hover hover:text-primary'
     }`;
 
   return (
     <MeContext.Provider value={me}>
       <div className="flex min-h-screen">
         {/* Sticky and viewport-high so Sign out stays in view however long the page is */}
-        <aside className="w-56 shrink-0 sticky top-0 h-screen bg-slate-900 border-r border-slate-700 flex flex-col">
-          <div className="px-6 py-5 border-b border-slate-700">
-            <h1 className="text-lg font-bold text-white">Buzzer Host</h1>
+        <aside className="w-56 shrink-0 sticky top-0 h-screen bg-surface border-r border-subtle flex flex-col">
+          <div className="px-6 py-5 border-b border-subtle">
+            <h1 className="text-lg font-bold text-primary">Buzzer Host</h1>
           </div>
           <nav className="flex-1 overflow-y-auto p-3 space-y-1">
             <NavLink to="/home" className={linkClass}>
@@ -109,17 +109,17 @@ export default function HostShell() {
               <History size={16} /> Sessions
             </NavLink>
           </nav>
-          <div className="p-3 border-t border-slate-700">
+          <div className="p-3 border-t border-subtle">
             <button
               onClick={signOut}
-              className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-700 hover:text-slate-100 w-full transition-colors"
+              className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-secondary hover:bg-hover hover:text-primary w-full transition-colors"
             >
               <LogOut size={16} /> Sign out
             </button>
           </div>
         </aside>
 
-        <main className="flex-1 overflow-auto">
+        <main className="flex-1 overflow-auto pt-6">
           <Outlet />
         </main>
       </div>

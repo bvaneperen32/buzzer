@@ -7,23 +7,32 @@ set retuned for touch — same API, larger targets.
 
 ## Contents
 
-- `button.tsx` — `Button`, with the same four variants and three sizes as the host's. Differences
-  are all touch-related: `rounded-xl`, `active:scale-95` for press feedback, and taller padding
-  (`md` is `px-5 py-3` here vs `px-4 py-2` in host).
-- `card.tsx` — `Card`, `CardHeader`, `CardContent`. `rounded-2xl` and slightly tighter padding
-  than the host's (`px-5` vs `px-6`).
-- `input.tsx` — `Input`. `rounded-xl`, `px-4 py-3`, explicit `text-base` — the last one matters:
-  iOS Safari auto-zooms the viewport on focus for any input under 16px.
+- `button.tsx` — `Button`, with the same four variants, three sizes and colour tokens as the
+  host's (`default` `bg-accent`, `outline` `border-input`, `ghost` `text-secondary`, `destructive`
+  `bg-danger`; no focus classes). Differences are all touch-related: `rounded-xl`,
+  `active:scale-95` for press feedback, and taller padding (`md` is `px-5 py-3` here vs `px-4 py-2`
+  in host).
+- `card.tsx` — `Card`, `CardHeader`, `CardContent`. The host's `bg-surface` / `border-subtle`
+  panel, with `rounded-2xl` and slightly tighter padding (`px-5` vs `px-6`).
+- `input.tsx` — `Input`. The host's colours (`bg-raised`, `border-input`, accent border on focus)
+  with `rounded-xl`, `px-4 py-3`, explicit `text-base` — the last one matters: iOS Safari
+  auto-zooms the viewport on focus for any input under 16px.
 - `TimerBar.tsx` — countdown bar. Takes `totalSeconds` and `paused`. Thinner than the host's
-  (`h-4` vs `h-6`) with a smaller seconds readout, and the same green → yellow → red thresholds
-  at 60% and 30%.
+  (`h-4` vs `h-6`) with a smaller seconds readout, and the same meter colours (`meter-success` →
+  `meter-warning` → `meter-danger` on `bg-meter-track`) and thresholds, 60% and 30%.
+- `ThemeToggle.tsx` (T9) — the light/dark switch, fixed top-right. The host's component with key
+  `buzzer-theme-player` (must match the `index.html` script) and a 44px touch target (host and
+  admin: 40px).
 - `SafeImage.tsx` (T8) — the phone's copy of the host's image component, deliberately simpler:
   links arrive only in `new_question`, so there's nothing to refresh. On the first error it
   remounts once with the same link (valid for at least 2 hours after it was sent); on the
   second, "Image unavailable" with the description. No Retry button. The element stays
   transparent until it loads, so no broken-image icon. Its retry state is per instance, so
   `QuestionPage` keys each one by its link: a tile that keeps its position across questions
-  must not inherit the previous image's failure.
+  must not inherit the previous image's failure. **Images are shrink-wrapped** (T9): the wrapper
+  centres a `max-h-full max-w-full` `<img>` rather than using `object-contain`, so the light
+  `bg-media` sits only behind the picture. A tile's empty bands show the themed `bg-raised`, and
+  an image smaller than its tile is no longer stretched up to fill it.
 
 `SortBoard.tsx` and `SpotCanvas.tsx` (T7, beside `ui/`) are the two new answer surfaces:
 
@@ -51,7 +60,12 @@ Dumb components: they never read `useGame()`, call `api`, or navigate. Note that
 four types' answer controls are *not* here — the multiple-choice tiles, True/False buttons, text
 field, and multi-select checklist are all inline in `pages/game/QuestionPage.tsx`, because each is
 tightly coupled to its submit logic. T7's two are components, because each carries real
-interaction state.
+interaction state. All styling is Tailwind token classes from the shared theme
+([frontend/shared/CLAUDE.md](../../../shared/CLAUDE.md)). `SpotCanvas` draws on a canvas, which
+can't use classes: it reads its colours from the tokens at draw time (`lib/canvasColors.ts`) and
+redraws when `observeTheme` reports a theme change. Its grid follows the theme (the phone never
+shows the image); only the grid lines keep the projector's fixed dark-then-light double stroke.
+`SortBoard`'s cards carry no `hover:`, like the other answer controls: hover sticks after a tap.
 
 ## Gotchas
 

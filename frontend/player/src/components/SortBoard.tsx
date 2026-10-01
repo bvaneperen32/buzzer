@@ -151,7 +151,7 @@ export function SortBoard({ boxes, cards, order, accuracy, disabled, onSubmit }:
         onPointerCancel={onPointerCancel}
         onClick={(e) => onCardClick(e, card)}
         className={`select-none rounded-xl border-2 px-3 py-2 text-base font-semibold transition-colors
-          ${isSelected ? 'border-white bg-indigo-500 text-white' : 'border-slate-500 bg-slate-700 text-slate-100'}
+          ${isSelected ? 'border-accent bg-accent text-on-accent' : 'border-input bg-raised text-primary'}
           ${disabled ? 'opacity-60' : 'active:scale-95'}
           ${ghost?.card === card ? 'opacity-40' : ''}`}
       >
@@ -163,29 +163,29 @@ export function SortBoard({ boxes, cards, order, accuracy, disabled, onSubmit }:
   return (
     <div className="flex flex-col gap-3">
       {accuracy ? (
-        <p className="text-center text-xs text-slate-400">
+        <p className="text-center text-xs text-secondary">
           Right: +1 card. Wrong: −{wrongCost(boxes.length)} card. Left out: 0. This question's score
           never goes below 0. Unsure? Leaving a card out costs nothing.
         </p>
       ) : (
-        <p className="text-center text-xs text-slate-400">Sort the cards however you think — any sorting counts.</p>
+        <p className="text-center text-xs text-secondary">Sort the cards however you think — any sorting counts.</p>
       )}
 
       <div
         data-drop-pool
         aria-label="Card pool"
-        className="flex min-h-16 flex-wrap gap-2 rounded-2xl border-2 border-dashed border-slate-600 p-3"
+        className="flex min-h-16 flex-wrap gap-2 rounded-2xl border-2 border-dashed border-input p-3"
         onClick={() => selected !== null && placements[selected] !== null && place(selected, null)}
       >
         {shown.filter((card) => placements[card] === null).map(chip)}
-        {leftOut === 0 && <span className="self-center text-sm text-slate-500">All cards placed</span>}
+        {leftOut === 0 && <span className="self-center text-sm text-secondary">All cards placed</span>}
       </div>
 
       {selected !== null && placements[selected] !== null && !disabled && (
         <button
           type="button"
           onClick={() => place(selected, null)}
-          className="self-start rounded-xl border border-slate-500 px-3 py-2 text-sm text-slate-200 active:scale-95"
+          className="self-start rounded-xl border border-input px-3 py-2 text-sm text-primary hover:bg-hover active:scale-95"
         >
           Return {cards[selected]} to the pool
         </button>
@@ -198,7 +198,7 @@ export function SortBoard({ boxes, cards, order, accuracy, disabled, onSubmit }:
             data-drop-box={box}
             onClick={() => chooseBox(box)}
             className={`flex min-h-28 flex-col gap-2 rounded-2xl border-2 p-2 ${
-              selected !== null && !disabled ? 'border-indigo-400 bg-indigo-950/40' : 'border-slate-600 bg-slate-800/60'
+              selected !== null && !disabled ? 'border-accent bg-accent-subtle' : 'border-input bg-raised'
             }`}
           >
             <button
@@ -209,7 +209,7 @@ export function SortBoard({ boxes, cards, order, accuracy, disabled, onSubmit }:
                 chooseBox(box);
               }}
               aria-label={selected !== null ? `Box ${label}: place ${cards[selected]} here` : `Box ${label}`}
-              className="w-full rounded-lg px-1 py-1 text-left text-base font-bold text-indigo-200"
+              className="w-full rounded-lg px-1 py-1 text-left text-base font-bold text-accent"
             >
               {label}
             </button>
@@ -223,8 +223,8 @@ export function SortBoard({ boxes, cards, order, accuracy, disabled, onSubmit }:
       </p>
 
       {confirming && !disabled ? (
-        <div className="rounded-2xl border border-amber-500/60 bg-amber-900/30 p-3 text-center" role="alertdialog" aria-live="assertive">
-          <p className="text-amber-100">
+        <div className="rounded-2xl border border-warning bg-warning-subtle p-3 text-center" role="alertdialog" aria-live="assertive">
+          <p className="text-primary">
             {leftOut === 1 ? '1 card is left out' : `${leftOut} cards are left out`}
             {accuracy ? ` and ${leftOut === 1 ? 'scores' : 'score'} 0` : ''}. Submit anyway?
           </p>
@@ -232,14 +232,14 @@ export function SortBoard({ boxes, cards, order, accuracy, disabled, onSubmit }:
             <button
               type="button"
               onClick={submit}
-              className="flex-1 rounded-xl bg-indigo-600 py-3 font-bold text-white active:scale-95"
+              className="flex-1 rounded-xl bg-accent py-3 font-bold text-on-accent hover:bg-accent-hover active:scale-95"
             >
               Submit anyway
             </button>
             <button
               type="button"
               onClick={() => setConfirming(false)}
-              className="flex-1 rounded-xl border border-slate-500 py-3 font-semibold text-slate-200 active:scale-95"
+              className="flex-1 rounded-xl border border-input py-3 font-semibold text-primary hover:bg-hover active:scale-95"
             >
               Keep sorting
             </button>
@@ -250,7 +250,7 @@ export function SortBoard({ boxes, cards, order, accuracy, disabled, onSubmit }:
           type="button"
           disabled={disabled || placed === 0}
           onClick={submit}
-          className="w-full rounded-2xl py-5 text-white font-black text-2xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+          className="w-full rounded-2xl py-5 text-on-accent font-black text-2xl bg-accent hover:bg-accent-hover active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
         >
           Submit ({placed} of {cards.length} placed)
         </button>
@@ -258,7 +258,7 @@ export function SortBoard({ boxes, cards, order, accuracy, disabled, onSubmit }:
 
       {ghost && (
         <div
-          className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-1/2 rounded-xl border-2 border-white bg-indigo-500 px-3 py-2 text-base font-semibold text-white shadow-xl"
+          className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-1/2 rounded-xl border-2 border-accent bg-accent px-3 py-2 text-base font-semibold text-on-accent shadow-xl"
           style={{ left: ghost.x, top: ghost.y }}
           aria-hidden="true"
         >

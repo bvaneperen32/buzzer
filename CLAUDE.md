@@ -78,6 +78,7 @@ npm run build
 python scripts/seed_demo.py
 python scripts/simulate_players.py --room ABCDE1
 python scripts/smoke_test_websocket.py
+python scripts/check_theme.py        # frontend colour tokens: contrast, names, leftovers
 ```
 
 ## Elephant-Goldfish tooling (optional, encouraged)

@@ -19,7 +19,9 @@ Tailwind config, and `tsconfig`. Each has the same internal shape:
 has its own `CLAUDE.md`.
 
 There is **no shared package, no workspace, and no root `src/`.** The root `package.json` exists
-only to run the three projects together via `concurrently`.
+only to run the three projects together via `concurrently`. The one shared folder is
+[`shared/`](shared/CLAUDE.md): the colour theme (tokens, base CSS, Tailwind preset, theme logic),
+which each app imports by relative path. It is not a package and has no build step.
 
 ## Architecture
 
@@ -109,10 +111,17 @@ The `config.py` default omits `:5174`, so the player socket works in dev only if
   library list; the projector's session link map, `GET /api/game/sessions/{id}/images`); phones
   get small links for option images inside `new_question` (`images`). An image id a screen
   can't resolve means "no image" — show the letter and caption, never a broken icon. Question
-  `config` carries the ids (`prompt_image_id`, `option_images`, and T7's Spot It `image_id`) in
-  snake_case on both transports. Phones never get a link for a Spot It image: they draw only its
-  grid, from `config.grid` and the image's proportions (`config.width` / `height`).
-- Styling is Tailwind with hardcoded slate/indigo colours, dark-only, no theme layer.
+  `config` carries the ids (`prompt_image_id`, `option_images`) in snake_case on both transports.
+- **Styling is Tailwind over shared colour tokens, in light and dark** (T9). Every colour lives in
+  `shared/theme/tokens.css`: Radix Colors primitives, with role-named semantic tokens on top. The
+  shared preset replaces Tailwind's palette, so classes read `bg-surface`, `text-primary`,
+  `border-input`, and `bg-slate-800` or `text-white` no longer exist. `<html data-theme>` selects
+  the theme. An inline script in each `index.html` sets it before first paint, and each app's
+  fixed top-right `ThemeToggle` changes it and stores the choice under the app's own key
+  (`buzzer-theme-host` / `-player` / `-admin`). Focus comes from one global `:focus-visible`
+  outline in `base.css`, so no component carries `focus:ring` or `outline-none` classes. See
+  [shared/CLAUDE.md](shared/CLAUDE.md). T7's Spot It canvases can't use classes: they read the
+  tokens at draw time (`lib/canvasColors.ts`) and redraw when `observeTheme` reports a change.
 
 ## Gotchas
 
@@ -126,7 +135,8 @@ they have already drifted. T8 adds two more copied pieces, in host and player on
 `spotGrid.ts` holds the grid limits (`maxGrid` / `gridFits` / `defaultGrid`, copied from the
 backend's `spot_it`, the authority) plus labels, readers, canvas layout, heat steps and the
 editor's texts; the player's repeats only the labels, readers and canvas layout, with no limits.
-Each `canvasColors.ts` holds only its own app's canvas colours. How the older copies differ:
+Each `canvasColors.ts` maps only its own app's canvas colours to tokens; the small `token()`
+reader in each is a deliberate copy. How the older copies differ:
 
 - Admin's `Button` / `Card` / `Input` / `utils.ts` are **byte-identical** to host's.
 - Player's are the same API deliberately **retuned for touch** (larger padding, `active:scale-95`,
@@ -136,6 +146,9 @@ Each `canvasColors.ts` holds only its own app's canvas colours. How the older co
 - `api.ts` differs in **which verbs exist** — player has `get`/`post`; host and admin both have
   every verb plus `postForm`/`download`, and throw an `ApiError` carrying the HTTP status. All
   three share one error-message helper (below).
+- `ThemeToggle` (T9) has three copies that differ only in their storage key, which must match
+  that app's `index.html` script, and in player's larger 44px touch target. The logic behind them
+  is shared (`shared/theme/theme.ts`).
 
 Treat a fix in one as needing review in the other two. Check whether a difference is deliberate
 (player's touch sizing) before "resyncing" anything.
@@ -187,10 +200,26 @@ and player `LoginPage`s, which still reads only `detail`. *Noted, not scheduled.
   the value's shortest decimal representation (0.15 → "0.2", 2.55 → "2.6"). Switching the report
   to `Decimal(x)` would break that; unit tests pin it.
 
+### The shared theme
+
+Two hard rules, both verified while designing T9 (spec §2.3):
+
+- **No file in `shared/` may import a package** (not `react`, not `tailwindcss` types). There is no
+  `node_modules` above it, so the import can't resolve. That is why `preset.d.ts` is hand-written
+  and why the React toggle lives in each app.
+- **CI does not protect the shared set-up.** CI's `tsc --noEmit` passes shared-file set-ups that
+  fail `tsc -b`, so a wrong variant breaks only `npm run build`. Run `npm run build` in all three
+  apps before merging a change to `shared/` or to an app's `tailwind.config.ts` or `tsconfig`.
+
+Also: a class the preset doesn't define (a leftover `bg-slate-800`, a typo) builds fine and
+renders with no colour. And a page with correct page colours but colourless buttons, bars and
+status text is a stale compiled `tailwind.config.js` or a stale tab: restart the dev server, then
+hard-refresh. `python scripts/check_theme.py` checks contrast, token names and leftovers.
+
 ### Shared shortcuts
 
-- **No app has tests, lint config, or a CI hook.** `tsc -b` during build is the only automated
-  check in the entire frontend.
+- **No app has tests or lint config.** CI (`.gitlab-ci.yml`) runs `tsc --noEmit` in each app;
+  `tsc -b` during `npm run build` is stricter, and `python scripts/check_theme.py` checks colours.
 - **Types are hand-written and drift.** Nothing generates them from the backend's OpenAPI schema;
   host's `types/game.ts` declares fields the server never sends, player's omits fields it does
   send, and admin has no `types/` at all (each page redeclares its own).

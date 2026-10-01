@@ -13,11 +13,12 @@ controller, not a display — it can submit answers but never advances the game.
 - `main.tsx` — mounts `<App />` into `#root` inside `<StrictMode>`.
 - `App.tsx` — router: `/join`, `/login`, `/name/:code`, and the nested `/game/:code/*` routes
   (`lobby`, `question`, `feedback`, `results`, `gameover`). Unmatched paths go to `/join`.
-  **There is no route guard** — `GameLayout` handles auth itself.
-- `index.css` — Tailwind directives, the dark slate background, and
-  `-webkit-tap-highlight-color: transparent` to kill the mobile tap flash. T7 adds
-  `.spot-height-cap` (`55vh`, then `55svh` where supported), the probe `SpotCanvas` measures for
-  its height cap.
+  **There is no route guard** — `GameLayout` handles auth itself. Renders `ThemeToggle` once,
+  after the routes, so it appears on every screen.
+- `index.css` — imports the shared `tokens.css` and `base.css` (page colours, global focus
+  outline), then the Tailwind directives, plus `-webkit-tap-highlight-color: transparent` to kill
+  the mobile tap flash. T7 adds `.spot-height-cap` (`55vh`, then `55svh` where supported), the
+  probe `SpotCanvas` measures for its height cap.
 - `types/game.ts` — socket payload types: `SyncStatePayload`, `QuestionPayload`,
   `AnswerResultPayload`, `PlayerResultsPayload`, `PlayerGameOverPayload`, the
   `PlayerAnswerReveal` union, and `PlayerPhase`, plus `QuestionConfig` (T8's `prompt_image_id` /
@@ -30,7 +31,7 @@ controller, not a display — it can submit answers but never advances the game.
 - [`pages/`](pages/CLAUDE.md) — join/identity flow and the five in-game screens, plus
   `GameLayout`.
 - [`components/`](components/CLAUDE.md) — touch-tuned `Button`, `Card`, `Input`, `TimerBar`,
-  `SafeImage`, and T7's answer surfaces, `SortBoard` and `SpotCanvas`.
+  `SafeImage`, `ThemeToggle`, and T7's answer surfaces, `SortBoard` and `SpotCanvas`.
 - [`lib/`](lib/CLAUDE.md) — REST client, `cn`, `isTokenExpired`, `questionImages` (T8), and T7's
   `spotGrid`, `formatPoints`, `canvasColors` and `t7Results`.
 
@@ -96,8 +97,8 @@ deliberate Jackbox-style choice (see [pages/CLAUDE.md](pages/CLAUDE.md)), not a 
 
 ### Divergence from the sibling apps
 
-This app shares no code with `host` or `admin`, and the copies have already drifted in ways that
-matter:
+Apart from the colour theme (`frontend/shared/theme/`), this app shares no code with `host` or
+`admin`, and the copies have already drifted in ways that matter:
 
 - `TimerBar` here has no `initialSeconds` prop; the host's does.
 - `api.ts` here has only `get` / `post`; the host's and admin's have every verb, uploads, and
@@ -116,6 +117,19 @@ matter:
 - The timer uses wall-clock deltas, which matters here: phones background tabs and throttle
   intervals aggressively.
 - Every layout is single-column `min-h-screen` centred; there is no desktop or landscape design.
+
+### Styling
+
+- **Colours are shared theme tokens, light and dark** (T9; see
+  [frontend/shared/CLAUDE.md](../../shared/CLAUDE.md)). Use token classes (`bg-surface`,
+  `text-secondary`, `border-input`); palette classes and hex values no longer exist. No
+  `focus:ring` or `outline-none` classes: focus is one global outline.
+- Answer tiles use `bg-option-N text-on-option-N` (N = 1–8, cycling), and every tile's text is
+  the same dark colour in both themes. They have no `hover:` colour, because on a phone it sticks
+  after a tap.
+- `ThemeToggle` is fixed top-right (`z-40`, 44px) over every screen. Content that reaches that
+  corner needs top padding to clear it (the multiple-choice and multi-select screens use `pt-16`).
+  The "Host disconnected" banner (`z-50`) covers it while shown.
 
 ### Development behavior
 

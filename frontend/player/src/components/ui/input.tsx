@@ -6,9 +6,9 @@ export function Input({ className, ...props }: InputProps) {
   return (
     <input
       className={cn(
-        'w-full rounded-xl border border-slate-600 bg-slate-800 px-4 py-3',
-        'text-slate-100 placeholder-slate-400 text-base',
-        'focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent',
+        'w-full rounded-xl border border-input bg-raised px-4 py-3',
+        'text-primary placeholder:text-secondary text-base',
+        'focus-visible:border-accent',
         className
       )}
       {...props}

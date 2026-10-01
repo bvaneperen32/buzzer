@@ -47,9 +47,9 @@ export function SortItResults({
   if (correctBoxes && correctBoxes.length === n) {
     const rows = ordered(sortAccuracyRows(n, k, distribution, answered, correctBoxes));
     return (
-      <table className={`w-full ${big ? 'text-lg' : 'text-sm'} text-slate-200`} data-sort-results="accuracy">
+      <table className={`w-full ${big ? 'text-lg' : 'text-sm'} text-primary`} data-sort-results="accuracy">
         <thead>
-          <tr className="text-left text-xs uppercase tracking-wider text-slate-500">
+          <tr className="text-left text-xs uppercase tracking-wider text-secondary">
             <th className="pb-2 pr-3 font-semibold">Card</th>
             <th className="pb-2 pr-3 font-semibold">Correct box</th>
             <th className="pb-2 pr-3 font-semibold">% correct</th>
@@ -61,21 +61,21 @@ export function SortItResults({
           {rows.map((row: SortAccuracyRow) => (
             <tr
               key={row.card}
-              className="border-t border-slate-800"
+              className="border-t border-subtle"
               data-card={row.card}
               data-correct-box={row.correctBox}
               data-pct-correct={row.pctCorrect ?? ''}
               data-pct-left-out={row.pctLeftOut ?? ''}
               data-wrong-box={row.mostCommonWrongBox ?? ''}
             >
-              <td className="py-1.5 pr-3 font-semibold text-slate-100">{cards[row.card]}</td>
-              <td className="py-1.5 pr-3 text-green-300">{label(boxes, row.correctBox)}</td>
+              <td className="py-1.5 pr-3 font-semibold text-primary">{cards[row.card]}</td>
+              <td className="py-1.5 pr-3 text-success">{label(boxes, row.correctBox)}</td>
               <td className="py-1.5 pr-3">
                 <span className="flex items-center gap-2">
                   {big && (
-                    <span className="h-3 w-40 overflow-hidden rounded-full bg-slate-800" aria-hidden="true">
+                    <span className="h-3 w-40 overflow-hidden rounded-full bg-meter-track" aria-hidden="true">
                       <span
-                        className="block h-full rounded-full bg-green-500"
+                        className="block h-full rounded-full bg-meter-success"
                         style={{ width: `${answered > 0 ? (row.correctCount / answered) * 100 : 0}%` }}
                       />
                     </span>
@@ -83,8 +83,8 @@ export function SortItResults({
                   <span className="tabular-nums">{pctText(row.pctCorrect)}</span>
                 </span>
               </td>
-              <td className="py-1.5 pr-3 tabular-nums text-slate-400">{pctText(row.pctLeftOut)}</td>
-              {big && <td className="py-1.5 text-slate-300">{label(boxes, row.mostCommonWrongBox)}</td>}
+              <td className="py-1.5 pr-3 tabular-nums text-primary">{pctText(row.pctLeftOut)}</td>
+              {big && <td className="py-1.5 text-primary">{label(boxes, row.mostCommonWrongBox)}</td>}
             </tr>
           ))}
         </tbody>
@@ -94,9 +94,9 @@ export function SortItResults({
 
   const rows = ordered(sortCompletenessRows(n, k, distribution, answered));
   return (
-    <table className={`w-full ${big ? 'text-lg' : 'text-sm'} text-slate-200`} data-sort-results="completeness">
+    <table className={`w-full ${big ? 'text-lg' : 'text-sm'} text-primary`} data-sort-results="completeness">
       <thead>
-        <tr className="text-left text-xs uppercase tracking-wider text-slate-500">
+        <tr className="text-left text-xs uppercase tracking-wider text-secondary">
           <th className="pb-2 pr-3 font-semibold">Card</th>
           <th className="pb-2 pr-3 font-semibold">Most common box</th>
           <th className="pb-2 font-semibold">%</th>
@@ -106,13 +106,13 @@ export function SortItResults({
         {rows.map((row: SortCompletenessRow) => (
           <tr
             key={row.card}
-            className="border-t border-slate-800"
+            className="border-t border-subtle"
             data-card={row.card}
             data-common-box={row.mostCommonBox ?? ''}
             data-pct-common={row.pctMostCommon ?? ''}
           >
-            <td className="py-1.5 pr-3 font-semibold text-slate-100">{cards[row.card]}</td>
-            <td className="py-1.5 pr-3 text-indigo-300">{label(boxes, row.mostCommonBox)}</td>
+            <td className="py-1.5 pr-3 font-semibold text-primary">{cards[row.card]}</td>
+            <td className="py-1.5 pr-3 text-accent">{label(boxes, row.mostCommonBox)}</td>
             <td className="py-1.5 tabular-nums">{pctText(row.pctMostCommon)}</td>
           </tr>
         ))}
@@ -131,7 +131,7 @@ export function SortItBoard({ boxes, cards, order }: { boxes: string[]; cards: s
           .map((i) => (
             <span
               key={i}
-              className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-2xl font-semibold text-slate-100"
+              className="rounded-xl border border-subtle bg-surface px-4 py-2 text-2xl font-semibold text-primary"
             >
               {cards[i]}
             </span>
@@ -145,9 +145,9 @@ export function SortItBoard({ boxes, cards, order }: { boxes: string[]; cards: s
         {boxes.map((box, i) => (
           <div
             key={i}
-            className="flex min-h-24 items-start justify-center rounded-2xl border-2 border-dashed border-indigo-500/60 bg-indigo-950/30 p-4"
+            className="flex min-h-24 items-start justify-center rounded-2xl border-2 border-dashed border-accent bg-accent-subtle p-4"
           >
-            <span className="text-2xl font-bold text-indigo-200">{box}</span>
+            <span className="text-2xl font-bold text-accent">{box}</span>
           </div>
         ))}
       </div>

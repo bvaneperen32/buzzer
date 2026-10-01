@@ -19,9 +19,9 @@ results, for the courses they HOST. Admins use them too.
   and the nested `/game/:code/*` routes (`lobby`, `question`, `results`, `gameover`) *outside*
   the shell. `/` and anything unmatched go to `/home` (`RequireAuth` sends signed-out users on
   to `/login`). Uses `basename={import.meta.env.BASE_URL}` because the app is served under the
-  `/host` path.
-- `index.css` — Tailwind directives plus the dark slate background (`#0f172a`) the whole app
-  assumes.
+  `/host` path. Renders `ThemeToggle` once, after the routes, so it appears on every screen.
+- `index.css` — imports the shared `tokens.css` and `base.css` (page colours, global focus
+  outline), then the Tailwind directives. No colour values of its own.
 - `types/game.ts` — every socket payload and shared type: `SyncStatePayload`, `QuestionPayload`,
   `HostResultsPayload`, `HostGameOverPayload`, the `AnswerReveal` discriminated union, and
   `HostPhase`, plus `QuestionConfig` (with T8's `prompt_image_id` / `option_images`) and the
@@ -37,8 +37,8 @@ results, for the courses they HOST. Admins use them too.
 - [`pages/`](pages/CLAUDE.md) — all screens: `HostShell` and the management pages, plus
   `GameLayout`, which owns the socket and all game state, and its game screens.
 - [`components/`](components/CLAUDE.md) — presentational primitives (`Button`, `Card`, `Input`,
-  `SafeImage`), `TimerBar`, the editor's image components (`images/`), and T7's Sort It and
-  Spot It displays (`question/`).
+  `SafeImage`), `TimerBar`, `ThemeToggle`, the editor's image components (`images/`), and T7's
+  Sort It and Spot It displays (`question/`).
 - [`lib/`](lib/CLAUDE.md) — the REST client (with `ApiError`, uploads, and downloads), the
   in-memory current-user context (`useMe`), the `cn` class-name helper, T8's image hooks and
   helpers (`useImageLibrary`, `useSessionImageLinks`, `questionImages`, `format`), and T7's
@@ -151,8 +151,16 @@ Six pieces of logic exist in both this app and the backend and must be changed t
 
 ### Styling
 
-- The dark background is set on `body` in `index.css`, and every component assumes a dark slate
-  palette with hardcoded Tailwind colors. There is no theme token layer and no light mode.
+- **Colours are shared theme tokens, light and dark** (T9; see
+  [frontend/shared/CLAUDE.md](../../shared/CLAUDE.md)). Use token classes (`bg-surface`,
+  `text-secondary`, `border-input`, `bg-meter-success`); palette classes (`bg-slate-800`,
+  `text-white`) and hex values no longer exist. No `focus:ring` or `outline-none` classes: focus is
+  one global outline.
+- Projector text (prompts, room code, option labels, counts, scores) uses `text-primary`, never
+  `text-secondary`, so it stays legible from the back of a room in either theme.
+- `ThemeToggle` is fixed top-right (`z-40`) over every screen. `HostShell`'s main area has top
+  padding so page headers clear it; a new full-screen page with content in that corner needs
+  the same.
 - The game screens target a projector: type scales are large (`text-8xl` room codes, `text-4xl`
   prompts) and layouts assume a wide landscape viewport. Don't optimise them for mobile — the
   player app is the mobile client. The shell and management pages use the admin app's dense,

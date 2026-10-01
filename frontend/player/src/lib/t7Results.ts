@@ -14,12 +14,14 @@ import { cellLabel, readCell, sortCells } from './spotGrid';
 
 export type Tone = 'full' | 'partial' | 'none' | 'recorded' | 'missing';
 
+// Whole class names, never built from fragments: Tailwind scans this file but can't see a built
+// class. The colour only reinforces the result; every line also says it in words (WCAG 1.4.1).
 export const TONE_CLASS: Record<Tone, string> = {
-  full: 'text-green-400',
-  partial: 'text-amber-300',
-  none: 'text-red-400',
-  recorded: 'text-indigo-300',
-  missing: 'text-slate-400',
+  full: 'text-success',
+  partial: 'text-warning',
+  none: 'text-danger',
+  recorded: 'text-accent',
+  missing: 'text-secondary',
 };
 
 export const T7_TYPES: QuestionType[] = ['sort_into_boxes', 'find_in_image'];

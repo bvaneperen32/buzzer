@@ -43,8 +43,8 @@ export default function JoinPage() {
     <div className="min-h-screen flex items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <h1 className="text-2xl font-bold text-slate-100 text-center">Buzzer</h1>
-          <p className="text-slate-400 text-sm text-center mt-1">Enter your room code to join</p>
+          <h1 className="text-2xl font-bold text-primary text-center">Buzzer</h1>
+          <p className="text-secondary text-sm text-center mt-1">Enter your room code to join</p>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleJoin} className="space-y-4">
@@ -59,7 +59,7 @@ export default function JoinPage() {
               autoComplete="off"
               autoFocus
             />
-            {error && <p className="text-red-400 text-sm text-center">{error}</p>}
+            {error && <p className="text-danger text-sm text-center">{error}</p>}
             <Button type="submit" className="w-full" size="lg" disabled={loading || roomCode.length < 6}>
               {loading ? 'Checking…' : 'Join Game'}
             </Button>

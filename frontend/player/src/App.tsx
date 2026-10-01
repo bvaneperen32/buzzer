@@ -1,4 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { ThemeToggle } from './components/ui/ThemeToggle';
 import JoinPage from './pages/JoinPage';
 import LoginPage from './pages/LoginPage';
 import NamePage from './pages/NamePage';
@@ -25,6 +26,8 @@ export default function App() {
         </Route>
         <Route path="*" element={<Navigate to="/join" replace />} />
       </Routes>
+      {/* Outside the routes, so every screen has it (join, game screens, errors) */}
+      <ThemeToggle />
     </BrowserRouter>
   );
 }

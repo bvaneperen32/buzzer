@@ -65,9 +65,9 @@ function describeCorrectAnswer(
 function T7QuestionRow({ item, index }: { item: QuestionSummaryItem; index: number }) {
   const { text, tone } = t7GameOverLine(item);
   return (
-    <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/50">
-      <p className="text-slate-400 text-xs uppercase tracking-wider mb-1">Q{index + 1}</p>
-      <p className="text-slate-100 text-sm font-medium leading-snug mb-2">{item.prompt}</p>
+    <div className="bg-surface rounded-xl p-4 border border-subtle">
+      <p className="text-secondary text-xs uppercase tracking-wider mb-1">Q{index + 1}</p>
+      <p className="text-primary text-sm font-medium leading-snug mb-2">{item.prompt}</p>
       <p className={`text-sm font-semibold ${TONE_CLASS[tone]}`} data-t7-line={item.type}>
         {text}
       </p>
@@ -89,46 +89,46 @@ function QuestionRow({ item, index }: { item: QuestionSummaryItem; index: number
     : '';
 
   return (
-    <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/50">
-      <p className="text-slate-400 text-xs uppercase tracking-wider mb-1">Q{index + 1}</p>
-      <p className="text-slate-100 text-sm font-medium leading-snug mb-3">{item.prompt}</p>
+    <div className="bg-surface rounded-xl p-4 border border-subtle">
+      <p className="text-secondary text-xs uppercase tracking-wider mb-1">Q{index + 1}</p>
+      <p className="text-primary text-sm font-medium leading-snug mb-3">{item.prompt}</p>
 
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
-          <p className="text-slate-500 text-xs mb-0.5">Your answer</p>
+          <p className="text-secondary text-xs mb-0.5">Your answer</p>
           <div className="flex items-center gap-2">
             {noAnswer ? (
-              <span className="text-slate-600 text-base">—</span>
+              <span className="text-secondary text-base">—</span>
             ) : isCompleteness ? (
-              <span className="text-indigo-400 text-base">●</span>
+              <span className="text-accent text-base">●</span>
             ) : isCorrect ? (
-              <span className="text-green-400 text-base">✓</span>
+              <span className="text-success text-base">✓</span>
             ) : (
-              <span className="text-red-400 text-base">✗</span>
+              <span className="text-danger text-base">✗</span>
             )}
             <span className={`text-sm font-semibold truncate ${
-              noAnswer ? 'text-slate-600' :
-              isCompleteness ? 'text-indigo-300' :
-              isCorrect ? 'text-green-300' : 'text-red-300'
+              noAnswer ? 'text-secondary' :
+              isCompleteness ? 'text-accent' :
+              isCorrect ? 'text-success' : 'text-danger'
             }`}>
               {playerAnswerLabel}
             </span>
           </div>
 
           {showCorrectAnswer && correctAnswerLabel && (
-            <p className="text-slate-500 text-xs mt-1">
-              Correct: <span className="text-green-400 font-medium">{correctAnswerLabel}</span>
+            <p className="text-secondary text-xs mt-1">
+              Correct: <span className="text-success font-medium">{correctAnswerLabel}</span>
             </p>
           )}
         </div>
 
         <div className="text-right shrink-0">
           <p className={`text-sm font-bold ${
-            item.pointsAwarded > 0 ? 'text-green-400' : 'text-slate-600'
+            item.pointsAwarded > 0 ? 'text-success' : 'text-secondary'
           }`}>
             +{item.pointsAwarded.toLocaleString()}
           </p>
-          <p className="text-slate-600 text-xs">pts</p>
+          <p className="text-secondary text-xs">pts</p>
         </div>
       </div>
     </div>
@@ -142,7 +142,7 @@ export default function GameOverPage() {
   if (!gameOver) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <p className="text-slate-400">Loading final results…</p>
+        <p className="text-secondary">Loading final results…</p>
       </div>
     );
   }
@@ -152,18 +152,18 @@ export default function GameOverPage() {
   return (
     <div className="min-h-screen flex flex-col p-4 gap-5">
       <div className="text-center pt-4 pb-2">
-        <h1 className="text-4xl font-black text-slate-100">Game Over!</h1>
+        <h1 className="text-4xl font-black text-primary">Game Over!</h1>
         <div className="mt-3 flex items-baseline justify-center gap-3">
-          <span className="text-5xl font-black text-indigo-400">#{yourFinalRank}</span>
-          <span className="text-slate-400 text-lg">of {playerCount}</span>
+          <span className="text-5xl font-black text-accent">#{yourFinalRank}</span>
+          <span className="text-secondary text-lg">of {playerCount}</span>
         </div>
-        <p className="text-white text-2xl font-bold mt-1">
+        <p className="text-primary text-2xl font-bold mt-1">
           {yourFinalScore.toLocaleString()} pts
         </p>
       </div>
 
       <div className="flex flex-col gap-3 pb-4">
-        <p className="text-slate-500 text-xs uppercase tracking-widest text-center">Question Recap</p>
+        <p className="text-secondary text-xs uppercase tracking-widest text-center">Question Recap</p>
         {questionSummary.map((item, i) => (
           <QuestionRow key={item.questionId} item={item} index={i} />
         ))}

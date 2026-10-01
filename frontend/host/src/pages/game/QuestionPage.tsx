@@ -35,7 +35,7 @@ export default function QuestionPage() {
   if (!currentQuestion) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <p className="text-slate-400">Loading question…</p>
+        <p className="text-secondary">Loading question…</p>
       </div>
     );
   }
@@ -86,19 +86,19 @@ export default function QuestionPage() {
     // the panel never covers an image. Text-only questions keep their layout.
     <div className={`min-h-screen flex flex-col items-center justify-center ${hasImages ? 'gap-4 px-8 py-6' : 'p-8 gap-8'}`}>
       <div className="flex items-center gap-3 text-sm uppercase tracking-wider">
-        <span className="text-slate-400">
+        <span className="text-secondary">
           Question {currentQuestion.questionNumber} of {currentQuestion.totalQuestions}
         </span>
-        <span className="text-slate-600">·</span>
-        <span className="text-slate-400">{typeLabel[currentQuestion.type] ?? currentQuestion.type}</span>
-        <span className="text-slate-600">·</span>
-        <span className={currentQuestion.gradingType === 'COMPLETENESS' ? 'text-amber-400' : 'text-indigo-400'}>
+        <span className="text-secondary">·</span>
+        <span className="text-secondary">{typeLabel[currentQuestion.type] ?? currentQuestion.type}</span>
+        <span className="text-secondary">·</span>
+        <span className={currentQuestion.gradingType === 'COMPLETENESS' ? 'text-warning' : 'text-accent'}>
           {currentQuestion.gradingType === 'COMPLETENESS' ? 'Participation' : 'Accuracy'}
         </span>
         {currentQuestion.type === 'fill_in_the_blank' && currentQuestion.gradingType === 'ACCURACY' && (
           <>
-            <span className="text-slate-600">·</span>
-            <span className="text-slate-400 normal-case">
+            <span className="text-secondary">·</span>
+            <span className="text-secondary normal-case">
               {editDistanceLabel(currentQuestion.editDistance ?? 0)}
             </span>
           </>
@@ -115,7 +115,7 @@ export default function QuestionPage() {
       </div>
 
       {!questionLocked && (
-        <h2 className="text-4xl font-bold text-slate-100 text-center max-w-3xl leading-tight">
+        <h2 className="text-4xl font-bold text-primary text-center max-w-3xl leading-tight">
           {currentQuestion.prompt}
         </h2>
       )}
@@ -177,14 +177,14 @@ export default function QuestionPage() {
                     ? imageOptionName(i, caption, link?.description ?? '')
                     : `Option ${optionLetter(i)}${hasCaption(caption) ? `: ${caption}` : ''}`
                 }
-                className="flex flex-col gap-2 rounded-2xl border border-slate-700 bg-slate-800/60 p-3"
+                className="flex flex-col gap-2 rounded-2xl border border-subtle bg-surface p-3"
               >
                 <div className="flex items-center gap-3">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-xl font-black text-white">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent text-xl font-black text-on-accent">
                     {optionLetter(i)}
                   </span>
                   {hasCaption(caption) && (
-                    <figcaption className="text-xl font-semibold text-slate-100 leading-tight">
+                    <figcaption className="text-xl font-semibold text-primary leading-tight">
                       {caption}
                     </figcaption>
                   )}
@@ -207,14 +207,14 @@ export default function QuestionPage() {
       </div>
       )}
 
-      <div className="text-slate-300 text-xl">
+      <div className="text-primary text-xl">
         {answeredCount} / {playerCount} answered
-        {allAnswered && <span className="ml-3 text-green-400 font-semibold">All answered!</span>}
-        {questionLocked && <span className="ml-3 text-amber-400 font-semibold">· Answers locked</span>}
+        {allAnswered && <span className="ml-3 text-success font-semibold">All answered!</span>}
+        {questionLocked && <span className="ml-3 text-warning font-semibold">· Answers locked</span>}
       </div>
 
       {resultsDelayed && (
-        <p role="status" className="text-amber-300 text-lg" data-results-delayed>
+        <p role="status" className="text-warning text-lg" data-results-delayed>
           An answer is still being saved, so the results aren't ready yet. Press Show Results again
           in a moment.
         </p>
@@ -225,8 +225,7 @@ export default function QuestionPage() {
           size="lg"
           variant="outline"
           onClick={emitLockQuestion}
-          disabled={!canControl}
-          className={`px-10 ${questionLocked ? 'border-amber-500 text-amber-400 hover:bg-amber-500/10' : ''}`}
+          className={`px-10 ${questionLocked ? 'border-warning text-warning hover:bg-warning-subtle' : ''}`}
         >
           {questionLocked ? 'Unlock Question' : 'Lock Question'}
         </Button>

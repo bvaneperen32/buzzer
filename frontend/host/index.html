@@ -2,6 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // Sets the theme before first paint: the stored choice, else the OS preference.
+      // The key must match THEME_KEY in src/components/ui/ThemeToggle.tsx.
+      (function () {
+        var theme = null;
+        try { theme = localStorage.getItem('buzzer-theme-host'); } catch (e) {}
+        if (theme !== 'light' && theme !== 'dark') {
+          theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Buzzer — Host</title>
   </head>

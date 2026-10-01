@@ -15,22 +15,8 @@ import {
   type Grid,
   type Rect,
 } from '../../lib/spotGrid';
-import {
-  ACCEPTED_EDGE,
-  ACCEPTED_FILL,
-  CANVAS_BACKGROUND,
-  CORRECT_INNER,
-  CORRECT_OUTER,
-  COUNT_TEXT,
-  CURSOR,
-  GRID_DARK,
-  GRID_LIGHT,
-  HEADER_TEXT,
-  HEAT_COLORS,
-  HEAT_OPACITY,
-  PLACEHOLDER_TEXT,
-  TEXT_HALO,
-} from '../../lib/canvasColors';
+import { HEAT_OPACITY, canvasColors } from '../../lib/canvasColors';
+import { observeTheme } from '../../../../shared/theme/theme';
 
 /** The image under the grid: a server-issued link (null when none is available). */
 export interface CanvasImage {
@@ -159,10 +145,10 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number)
   return lines;
 }
 
-function haloText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, fill: string) {
+function haloText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, fill: string, halo: string) {
   ctx.lineJoin = 'round';
   ctx.lineWidth = 3;
-  ctx.strokeStyle = TEXT_HALO;
+  ctx.strokeStyle = halo;
   ctx.strokeText(text, x, y);
   ctx.fillStyle = fill;
   ctx.fillText(text, x, y);
@@ -199,6 +185,9 @@ export function SpotItCanvas({
   const [cursor, setCursor] = useState<GridCell | null>(null);
   const [focused, setFocused] = useState(false);
   const [announcement, setAnnouncement] = useState('');
+  // Colours are read from the theme at draw time, so a theme change must redraw.
+  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme);
+  useEffect(() => observeTheme(setTheme), []);
 
   useLayoutEffect(() => {
     const el = wrapRef.current;
@@ -234,7 +223,8 @@ export function SpotItCanvas({
     if (!ctx || rect.w <= 0 || rect.h <= 0) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssWidth, cssHeight);
-    ctx.fillStyle = CANVAS_BACKGROUND;
+    const colors = canvasColors();
+    ctx.fillStyle = colors.background;
     ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
 
     if (img) {
@@ -244,7 +234,7 @@ export function SpotItCanvas({
       ctx.font = '600 16px ui-sans-serif, system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = PLACEHOLDER_TEXT;
+      ctx.fillStyle = colors.placeholderText;
       const lines = wrapText(ctx, `Image unavailable — ${image.description}`, rect.w - 24);
       const top = rect.y + rect.h / 2 - ((lines.length - 1) * 20) / 2 - 18;
       lines.forEach((line, i) => ctx.fillText(line, rect.x + rect.w / 2, top + i * 20));
@@ -259,7 +249,7 @@ export function SpotItCanvas({
         const step = heatStep(count, max);
         if (!step || col >= grid.cols || row >= grid.rows) continue;
         const r = cellOf({ col, row });
-        ctx.fillStyle = HEAT_COLORS[step - 1];
+        ctx.fillStyle = colors.heat[step - 1];
         ctx.fillRect(r.x, r.y, r.w, r.h);
       }
       ctx.globalAlpha = 1;
@@ -267,12 +257,12 @@ export function SpotItCanvas({
     if (mode === 'author') {
       for (const cell of accepted) {
         const r = cellOf(cell);
-        ctx.fillStyle = ACCEPTED_FILL;
+        ctx.fillStyle = colors.acceptedFill;
         ctx.fillRect(r.x, r.y, r.w, r.h);
       }
     }
 
-    for (const line of [GRID_DARK, GRID_LIGHT]) {
+    for (const line of [colors.gridDark, colors.gridLight]) {
       ctx.strokeStyle = line.color;
       ctx.lineWidth = line.width;
       ctx.beginPath();
@@ -292,7 +282,7 @@ export function SpotItCanvas({
     const cellW = rect.w / grid.cols;
     const cellH = rect.h / grid.rows;
     if (mode === 'author') {
-      ctx.strokeStyle = ACCEPTED_EDGE;
+      ctx.strokeStyle = colors.acceptedEdge;
       ctx.lineWidth = 2;
       for (const cell of accepted) {
         const r = cellOf(cell);
@@ -304,15 +294,15 @@ export function SpotItCanvas({
       for (const cell of accepted) {
         const r = cellOf(cell);
         ctx.lineWidth = 3;
-        ctx.strokeStyle = CORRECT_OUTER;
+        ctx.strokeStyle = colors.correctOuter;
         ctx.strokeRect(r.x + 1.5, r.y + 1.5, r.w - 3, r.h - 3);
         ctx.lineWidth = 2;
-        ctx.strokeStyle = CORRECT_INNER;
+        ctx.strokeStyle = colors.correctInner;
         ctx.strokeRect(r.x + 4, r.y + 4, r.w - 8, r.h - 8);
         ctx.font = `800 ${tagFont}px ui-sans-serif, system-ui, sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
-        haloText(ctx, 'Correct', r.x + r.w / 2, r.y + 6, COUNT_TEXT);
+        haloText(ctx, 'Correct', r.x + r.w / 2, r.y + 6, colors.countText, colors.textHalo);
       }
       if (counts) {
         const countFont = Math.max(10, Math.min(28, cellW * 0.4, cellH * 0.4));
@@ -324,14 +314,14 @@ export function SpotItCanvas({
           if (count <= 0 || col >= grid.cols || row >= grid.rows) continue;
           const r = cellOf({ col, row });
           const shift = acceptedKeys.has(key) ? tagFont / 2 : 0;
-          haloText(ctx, String(count), r.x + r.w / 2, r.y + r.h / 2 + shift, COUNT_TEXT);
+          haloText(ctx, String(count), r.x + r.w / 2, r.y + r.h / 2 + shift, colors.countText, colors.textHalo);
         }
       }
     }
 
     const headerFont = Math.max(10, Math.min(18, band * 0.55));
     ctx.font = `700 ${headerFont}px ui-sans-serif, system-ui, sans-serif`;
-    ctx.fillStyle = HEADER_TEXT;
+    ctx.fillStyle = colors.headerText;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (let c = 0; c < grid.cols; c++) {
@@ -343,14 +333,14 @@ export function SpotItCanvas({
 
     if (mode === 'author' && focused && cursor) {
       const r = cellOf(cursor);
-      ctx.strokeStyle = CURSOR;
+      ctx.strokeStyle = colors.cursor;
       ctx.lineWidth = 3;
       ctx.setLineDash([6, 3]);
       ctx.strokeRect(r.x + 1.5, r.y + 1.5, r.w - 3, r.h - 3);
       ctx.setLineDash([]);
     }
     // Everything the drawing depends on is listed; the signatures stand for the arrays.
-  }, [layout, dpr, img, imageMissing, mode, grid.cols, grid.rows, band, countsSignature, acceptedSignature, focused, cursor, image?.description]);
+  }, [layout, dpr, img, imageMissing, mode, grid.cols, grid.rows, band, countsSignature, acceptedSignature, focused, cursor, image?.description, theme]);
 
   function toggle(cell: GridCell) {
     if (!onToggle || disabled) return;
@@ -407,7 +397,7 @@ export function SpotItCanvas({
         style={{ width: layout.cssWidth, height: layout.cssHeight }}
         className={
           mode === 'author'
-            ? `rounded-lg ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'} focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400`
+            ? `rounded-lg ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`
             : 'rounded-lg'
         }
         role={mode === 'author' ? 'application' : 'img'}
@@ -429,7 +419,7 @@ export function SpotItCanvas({
         <button
           type="button"
           onClick={() => void retry()}
-          className="absolute top-1/2 left-1/2 mt-6 -translate-x-1/2 rounded border border-slate-500 bg-slate-900/80 px-3 py-1 text-sm text-slate-200 hover:bg-slate-700"
+          className="absolute top-1/2 left-1/2 mt-6 -translate-x-1/2 rounded border border-input bg-surface/80 px-3 py-1 text-sm text-primary hover:bg-hover"
         >
           Retry
         </button>
@@ -455,29 +445,31 @@ export function HeatLegend({ counts, answered, total, showCorrect }: {
 }) {
   const max = Math.max(0, ...Object.values(counts));
   return (
-    <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-sm text-slate-300">
+    <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-sm text-primary">
+      {/* The swatches must match the canvas, so they use the same tokens (T9 spec §4.12): the
+          only inline colour styles in the app, and they hold no literal colour. */}
       {heatLegend(max).map(({ step, label }) => (
         <span key={step} className="inline-flex items-center gap-1.5">
           <span
             className="inline-block h-4 w-4 rounded"
-            style={{ background: HEAT_COLORS[step - 1], opacity: HEAT_OPACITY }}
+            style={{ background: `rgb(var(--heat-${step}) / ${HEAT_OPACITY})` }}
             aria-hidden="true"
           />
           {label}
         </span>
       ))}
-      <span className="text-slate-400">blank = no answers</span>
+      <span className="text-secondary">blank = no answers</span>
       {showCorrect && (
         <span className="inline-flex items-center gap-1.5">
           <span
             className="inline-block h-4 w-4 rounded-sm"
-            style={{ border: `2px solid ${CORRECT_INNER}`, outline: `2px solid ${CORRECT_OUTER}` }}
+            style={{ border: '2px solid rgb(var(--canvas-paper))', outline: '2px solid rgb(var(--canvas-ink))' }}
             aria-hidden="true"
           />
           Correct
         </span>
       )}
-      <span className="text-slate-400">
+      <span className="text-secondary">
         {answered} of {total} answered
       </span>
     </div>

@@ -28,9 +28,16 @@ JWT expiry check.
   `Intl.NumberFormat(undefined, {maximumFractionDigits: 1})`, so at most one decimal, half away
   from zero, in the viewer's locale ("687.5", "708.3", "1,000"). It agrees with the report's
   `format_points` because both round the shortest decimal representation (0.15 → "0.2").
-- `canvasColors.ts` (T7) — the phone canvas's colours, in one place for T9's theming.
+- `canvasColors.ts` (T7, themed by T9 §4.12) — the phone canvas's colours, read from the theme's
+  tokens by `canvasColors()` **at draw time** (never at module load). `token(name, alpha)` throws
+  on an unknown name rather than letting the canvas keep its previous colour. The phone's grid
+  never shows the image, so it follows the theme (`bg-raised`, `text-secondary` labels, an opaque
+  `bg-accent` selected cell); only the grid lines use the fixed `--canvas-ink`/`--canvas-paper`
+  double stroke. The `token()` reader is a deliberate copy of the host's.
 - `t7Results.ts` (T7) — the Sort It and Spot It results and game-over texts, built only from the
-  server's payload (answer, reveal, points).
+  server's payload (answer, reveal, points). `TONE_CLASS` maps each tone to a whole token class
+  (`text-success`, `-warning`, `-danger`, `-accent`, `-secondary`); keep them whole, because
+  Tailwind can't see a class built from fragments.
 
 ## How it fits in
 
