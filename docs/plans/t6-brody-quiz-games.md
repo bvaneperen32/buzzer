@@ -5,7 +5,9 @@ Sports**. Both are written by hand as version 2 game bundles with real downloade
 small new script embeds. Dexter's two T6 games are separate (`docs/plans/t6-quiz-games.md`).
 Branch: `feature/create-two-games`.
 
-Status: designed in an Elephant session (2026-10-04); not yet Goldfish-tested; nothing built.
+Status: designed in an Elephant session (2026-10-04); Goldfish-tested the same day and revised with
+its findings; three of the four images are final and the map is being replaced (§4.5); nothing
+else built.
 
 ## 1. Problem
 
@@ -61,12 +63,12 @@ least one image is unavoidable.
 |---|---|
 | `sample_games/wisconsin_all_about.json` | New: classroom bundle (§4.3) |
 | `sample_games/wisconsin_sports.json` | New: party bundle (§4.4) |
-| `sample_games/images/wisconsin_all_about/` | New: `ripon_schoolhouse.<ext>`, `wi_county_map.<ext>` |
-| `sample_games/images/wisconsin_sports/` | New: `lambeau_leap.<ext>`, `team_photo.<ext>` |
+| `sample_games/images/wisconsin_all_about/` | New: `ripon_schoolhouse.jpg`, `wisconsin_map.jpg` |
+| `sample_games/images/wisconsin_sports/` | New: `lambeau_leap.jpg`, `team_photo.jpg` |
 | `scripts/pack_game.py` | New (§4.6) |
 | `README.md` | "Sample games with images": a paragraph on these two games and `pack_game.py`; the scripts tree under "Project structure" gets a `pack_game.py` line |
 | `CLAUDE.md` (root) | "Scripts" block: `python scripts/pack_game.py sample_games/<game>.json   # embed a hand-written game's images (--check, --preview DIR)` |
-| this file | Image sources (§4.5) and Spot It grids (§4.7) are filled in during implementation |
+| this file | The map's row (§4.5) and the Spot It grids (§4.7) are filled in during implementation |
 
 Nothing reads `sample_games/` recursively. Both test suites glob `sample_games/*.json` only,
 which is why the images folder can live inside it. **Never put a non-bundle `.json` file at the
@@ -123,7 +125,7 @@ class."**; `max_players` 150. Maximum score 14.
 | 4 | fill_in_the_blank | ACCURACY | 1 | 25 | When Wisconsin joined the Union in 1848, it became the ___th state. (Answer with a number.) | — | accepted "30", "30th", "thirty", "thirtieth"; points 1 each; edit distance 0 |
 | 5 | multi_select | ACCURACY | 3 | 30 | Which of these are official Wisconsin state symbols? Select all that apply. | Badger · Northern cardinal · American robin · Walleye · Muskellunge (muskie) · Monarch butterfly | `answer_points` [1, −1, 1, −1, 1, −1] |
 | 6 | sort_into_boxes | ACCURACY | 3 | 60 | Sort each event into the period when it happened. | boxes: "Before statehood (pre-1848)" · "1848–1899" · "1900 and later"; cards below | `correct_boxes` below |
-| 7 | find_in_image, `image_id: "wi-county-map"` | ACCURACY | 1 | 30 | Find Madison, the state capital, on this map of Wisconsin's counties. | grid per §4.7 | cells per §4.7, `"confirmed": true` |
+| 7 | find_in_image, `image_id: "wisconsin-map"` | ACCURACY | 1 | 30 | Find Madison, the state capital, on this map of Wisconsin. | grid per §4.7 | cells per §4.7, `"confirmed": true` |
 | 8 | multiple_choice | ACCURACY | 1 | 25 | Which Wisconsin U.S. senator founded Earth Day in 1970? | Robert La Follette · Joseph McCarthy · William Proxmire · Gaylord Nelson | `answer_points` [0, 0, 0, 1] |
 | 9 | true_false | ACCURACY | 1 | 20 | True or false: Wisconsin grows more cranberries than any other state. | — | true 1, false 0 |
 | 10 | fill_in_the_blank | ACCURACY | 1 | 25 | Wisconsin's state motto is a single word: ___. | — | accepted "Forward"; points 1; edit distance 1 |
@@ -179,9 +181,9 @@ Notes on the answer keys:
 
 ### 4.5 Images
 
-Brody downloads each image (free licence or his own photo) into the game's images folder. When
-saving it, he renames it to the filename below, keeping its real extension (`.jpg`, `.png` or
-`.webp`); the bundle's `filename` must match exactly. Limits the script enforces:
+Brody downloads each image into the game's images folder. When saving it, he renames it to the
+filename below, keeping its real extension (`.jpg`, `.png` or `.webp`); the bundle's `filename`
+must match exactly. Limits the script enforces:
 - PNG, JPEG or WebP; not animated
 - **≤1600 px on the long side** after EXIF orientation
 - **≤2 MiB**
@@ -189,24 +191,27 @@ saving it, he renames it to the filename below, keeping its real extension (`.jp
 A few hundred KB is the target size, because each image is stored twice in the repo: once as the
 file and once as base64 inside the bundle.
 
-| Key | Game · use | File | Look for | Description (alt text; finalize once the image is chosen) |
-|---|---|---|---|---|
-| `ripon-schoolhouse` | classroom Q2 prompt | `ripon_schoolhouse.*` | Photo of the Little White Schoolhouse, Ripon (Wikimedia Commons) | "Photo of the Little White Schoolhouse in Ripon, Wisconsin, a small white one-room wooden schoolhouse." |
-| `wi-county-map` | classroom Q7 Spot It | `wi_county_map.*` | Blank Wisconsin county outline map: **no city or county labels**, lakes OK | "Outline map of Wisconsin divided into its 72 counties, with no labels." |
-| `lambeau-leap` | party Q3 prompt | `lambeau_leap.*` | A player doing the Lambeau Leap into the stands | "A Green Bay Packers player leaping into the stands at Lambeau Field as fans reach out." |
-| `team-photo` | party Q6 Spot It | `team_photo.*` | One real photo of **4–6 players** from one Wisconsin team, **standing apart**, faces or jersey numbers readable from across a room | Written once the photo is chosen; names the team, never the target |
+Three images are final and in their folders (all JPEG, no EXIF, so the server stores them
+unchanged). The map is being replaced:
 
-Descriptions must never give away the answer: no "birthplace of the Republican Party", no
-"LeRoy Butler", no target player's name.
+| Key | Game · use | File | Size (px) | What it shows | Description (alt text) |
+|---|---|---|---|---|---|
+| `ripon-schoolhouse` | classroom Q2 prompt | `ripon_schoolhouse.jpg` | 638 × 480 | The Little White Schoolhouse at dusk, with its sign and a historical marker | "Photo of the Little White Schoolhouse in Ripon, Wisconsin, a small white one-room wooden schoolhouse." |
+| `wisconsin-map` | classroom Q7 Spot It | `wisconsin_map.<ext>` | — | **Being replaced**: the first choice marked Madison with a capital star. The replacement must show the state outline and its lakes, **Mendota and Monona included**, with **no star, dot or name for any city**. County lines are optional. | Draft; check it against the replacement and never mention Madison: "Outline map of Wisconsin showing its lakes and rivers, with no city names." |
+| `lambeau-leap` | party Q3 prompt | `lambeau_leap.jpg` | 495 × 618 | A **drawing** (not a photo) of a Packers player leaping into the stands | "Illustration of a Green Bay Packers player leaping into the stands at Lambeau Field as cheering fans reach out." |
+| `team-photo` | party Q6 Spot It | `team_photo.jpg` | 738 × 369 | Four Packers (#21, #12, #85, #50) walking side by side, numbers readable | "Four Green Bay Packers players in green and gold uniforms walking side by side across the field." |
 
-Sources (fill in at implementation; one row per image):
+Neither a description nor the picture itself may give away the answer: no "birthplace of the
+Republican Party", no "LeRoy Butler", no target player's name. Known exceptions, accepted
+knowingly:
+- **Ripon photo.** The sign over the door and the roadside marker read "Birthplace of the
+  Republican Party", and front rows can read them on the projector. Brody accepted this for now
+  (2026-10-04). Cropping the sign out or swapping the photo later needs only a re-pack.
+- **Lambeau drawing.** The jersey shows #36, LeRoy Butler's number. That's a hint, not the
+  answer, but the description must never mention the number.
 
-| Key | Source URL | Author | Licence |
-|---|---|---|---|
-| ripon-schoolhouse | | | |
-| wi-county-map | | | |
-| lambeau-leap | | | |
-| team-photo | | | |
+**Licences aren't tracked.** These games are coursework: graded, never published or reused.
+Brody decided (2026-10-04) that image sources and licences are out of scope.
 
 ### 4.6 `scripts/pack_game.py`
 
@@ -240,7 +245,8 @@ For each bundle path `P` (all errors for a bundle are reported, and that bundle 
 5. Spot It questions:
    - `grid` must fit the image: `cols ≤ max_cols` and `rows ≤ max_rows` from
      `spot_it.max_grid(width, height)` on the oriented size.
-   - `accepted_cells` must lie inside the grid.
+   - `accepted_cells` must be 1 to ⌊cols·rows/2⌋ distinct cells, each inside the grid (the same
+     rule the import applies; §4.2).
    - Warn if `answer_data.confirmed` isn't `true`, because the game can't start until a host
      confirms it.
 6. Coverage: print the question types and grading modes present.
@@ -254,7 +260,10 @@ For each bundle path `P` (all errors for a bundle are reported, and that bundle 
    - With `--check`: write nothing, and report `out of date` if the text differs.
 8. `--preview DIR`: for each Spot It question, save `DIR/<image key>_grid.png`. It is the
    oriented image with the grid lines drawn, each cell labelled with `spot_it.cell_label` ("A1" =
-   column A, row 1), and the accepted cells tinted.
+   column A, row 1), and the accepted cells tinted. Overlays are drawn **even when the bundle has
+   other errors** (empty `data`, placeholder cells, a coverage gap), as long as the image opens and
+   the grid has two whole numbers from 2 to 10. Choosing the grid is what the preview is for, so
+   it can't wait for a clean bundle. Cells outside the grid are simply not tinted.
 
 Further rules:
 - Exit code 0 when everything passes, 1 on any error or stale file.
@@ -275,14 +284,19 @@ the authored file.
 
 Choose these after the images are in the folders, using `--preview`. Then record the result here.
 
-- **Classroom Q7 (map → Madison).** Pick a grid from 5×5 to 8×8 that fits the map's shape,
-  so Madison (in southern Dane County, on the isthmus between Lakes Mendota and Monona) falls in
-  1–2 cells. If Madison lies on a grid line, accept both cells.
+- **Classroom Q7 (map → Madison).** Pick a grid from 5×5 to 8×8 (as far as the replacement
+  map's `max_grid` allows) so Madison falls in 1–2 cells. Madison isn't marked, so locate it by
+  its lakes. It sits on the isthmus between Lakes Mendota and Monona, in the south-central part of
+  the state, where the Yahara River leaves the lakes heading south-east. Find that cluster on the
+  preview before choosing the grid, and record its rough pixel position here. If it lies on a grid
+  line, accept both cells.
 - **Party Q6 (team photo).** Choose columns so each player occupies whole columns where possible.
-  For example, 5 players → 5 or 10 columns, with 2 rows. Accept every cell the target player
-  occupies, up to half the grid. If players overlap so that a neighbour shares the target's cell,
-  either choose a finer grid or **swap the photo**; never accept a cell where another player is
-  the obvious subject. Decide the named player now, and put the name in the prompt.
+  This photo has 4 players, so use 4 or 8 columns with 2 rows (it allows up to 10×5). At 4
+  columns, #12 sits entirely inside column B. #85 and #50 each reach a few pixels into a
+  neighbouring column. Accept every cell the target player occupies, up to half the grid. Never
+  accept a cell where another player is the obvious subject. A referee and a photographer behind
+  the players, and people cut off at both edges, aren't players, but they must not be the main
+  subject of an accepted cell either. Decide the named player now, and put the name in the prompt.
 - Set `"confirmed": true` only after Claude has viewed the `--preview` overlay (Claude can read
   PNGs) and agrees the target is inside the tinted cells. After import, Brody checks the question
   in the Host question editor: it must show no "Needs review".
@@ -291,9 +305,15 @@ Record: Q7 grid ___ × ___, cells ___; Q6 player ___, grid ___ × ___, cells ___
 
 ### 4.8 Order of work
 
-1. Brody downloads the four images into the two folders and fills in the sources table (§4.5).
+1. Brody downloads the four images into the two folders (§4.5). Three are final. Only the map's
+   replacement is outstanding: steps 2–3 don't need it, and step 4 needs it only for the map.
 2. Write `scripts/pack_game.py` (§4.6); run `ruff check` / `ruff format` on it.
-3. Write both bundles exactly as §4.3 and §4.4, with `"data": ""` and placeholder Spot It grids.
+3. Write both bundles exactly as §4.3 and §4.4, with `"data": ""` and a placeholder for each
+   Spot It answer:
+   - `grid` is `spot_it.default_grid` for the image: team photo 6 × 3; for the map, whatever it
+     gives for the replacement (any valid grid will do until it arrives).
+   - `accepted_cells` is `[{"col": 0, "row": 0}]`.
+   - `"confirmed": false`, which `pack_game.py` reports as a warning, not an error.
 4. Run `pack_game.py --preview <scratch dir>`, choose grids and cells (§4.7), set `confirmed`,
    and record the choices in §4.7.
 5. Run `pack_game.py` on both, then `--check`.
@@ -344,6 +364,11 @@ Record: Q7 grid ___ × ___, cells ___; Q6 player ___, grid ___ × ___, cells ___
   re-check the keys. Nicolet is the traditional "first European in Wisconsin", but historians
   dispute that, so the Sort It card only says he landed at Green Bay.
 - **Repo size.** Each image is stored twice (file + base64), so keep the images small (§4.5).
+- **The images are low-resolution.** The three final ones are 618–738 px on the long side. The
+  script enforces a maximum size but no minimum, so the projector scales them up (about 1.5–2× on
+  a 1080p screen). Jersey numbers stay readable and photos look soft. Aim for a map replacement of
+  at least ~600 px. A sharper
+  replacement later needs only a re-pack, plus a new Spot It check if its grid image changes.
 - **`--check` isn't in CI**, the same gap as Dexter's script. What can drift here is only the
   embedded image data versus the files, never the text, because the bundle is its only copy.
 - **Out of scope:** two display bugs noted in `docs/plans/t6-quiz-games.md` §5. Phones show
