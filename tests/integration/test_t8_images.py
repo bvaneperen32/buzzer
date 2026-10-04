@@ -1356,9 +1356,18 @@ def test_export_import_cycles_preserve_bytes(t8):
     assert r.status_code == 422 and "Extra inputs are not permitted" in r.json()["message"]
 
 
+def sample_games(version: int) -> list[pathlib.Path]:
+    """The committed sample games that are bundles of one version."""
+    return sorted(
+        path
+        for path in (_REPO_ROOT / "sample_games").glob("*.json")
+        if json.loads(path.read_bytes())["version"] == version
+    )
+
+
 def test_version1_samples_still_import(t8):
     course_id, _ = t8.setup_game()
-    samples = sorted((_REPO_ROOT / "sample_games").glob("*.json"))
+    samples = sample_games(1)
     assert samples
     for path in samples:
         raw = path.read_bytes()
@@ -1368,6 +1377,61 @@ def test_version1_samples_still_import(t8):
         assert len(t8.questions(game_id)) == len(json.loads(raw)["questions"])
         assert json.loads(t8.export(game_id))["version"] == 1
         assert t8.library(game_id)["images"] == []
+
+
+@pytest.mark.parametrize("path", sample_games(2), ids=lambda path: path.name)
+def test_version2_samples_import_and_round_trip(t8, path):
+    """A sample game with images (T6) imports with its whole library, each reference lands on
+    the image its key named, its Spot It questions arrive confirmed, and export → import →
+    export is stable. The two exports are compared, never the authored file's formatting."""
+    course_id, _ = t8.setup_game()
+    raw = path.read_bytes()
+    bundle = json.loads(raw)
+    r = t8.import_bundle(course_id, raw)
+    assert r.status_code == 201, r.text
+    game_id = r.json()["game_id"]
+
+    # Import creates the images in bundle order, so their ids ascend in that order.
+    library = sorted(t8.library(game_id)["images"], key=lambda image: image["id"])
+    assert len(library) == len(bundle["images"])
+    id_for_key = {}
+    for entry, image in zip(bundle["images"], library):
+        assert image["filename"] == entry["filename"]
+        assert image["description"] == entry["description"]
+        assert image["used_by"], f"image {entry['key']} isn't used by any question"
+        id_for_key[entry["key"]] = image["id"]
+
+    questions = t8.questions(game_id)
+    assert len(questions) == len(bundle["questions"])
+    for n, (sent, stored) in enumerate(zip(bundle["questions"], questions), start=1):
+        assert stored["type"] == sent["type"], n
+        for key in ("prompt_image_id", "image_id"):
+            if key in sent["config"]:
+                assert stored["config"][key] == id_for_key[sent["config"][key]], (n, key)
+        if "option_images" in sent["config"]:
+            expected = [id_for_key.get(k) for k in sent["config"]["option_images"]]
+            assert stored["config"]["option_images"] == expected, n
+        if sent["type"] == "find_in_image":
+            grid = sent["config"]["grid"]
+            assert sent["answer_data"].get("confirmed") is True, n
+            assert stored["needs_review"] is False, (n, stored["review_reasons"])
+            assert stored["answer_data"]["confirmed_for"] == {
+                "image_id": id_for_key[sent["config"]["image_id"]],
+                "image_version": 1,
+                "cols": grid["cols"],
+                "rows": grid["rows"],
+            }, n
+
+    first = t8.export(game_id)
+    exported = json.loads(first)
+    assert exported["version"] == 2
+    assert len(exported["images"]) == len(bundle["images"])
+    for q in exported["questions"]:
+        if q["type"] == "find_in_image":
+            assert q["answer_data"].get("confirmed") is True
+    r = t8.import_bundle(course_id, first)
+    assert r.status_code == 201, r.text
+    assert t8.export(r.json()["game_id"]) == first
 
 
 def test_bundle_images_field_edge_cases(t8):

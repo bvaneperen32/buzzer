@@ -27,8 +27,12 @@ from app.services.image_refs import (
     map_image_refs,
 )
 
+# The version 1 samples, which must still export byte for byte as before T8. Version 2
+# samples (T6 games with images) are round-tripped by the integration suite instead.
 SAMPLE_GAMES = sorted(
-    (Path(__file__).resolve().parents[2] / "sample_games").glob("*.json")
+    path
+    for path in (Path(__file__).resolve().parents[2] / "sample_games").glob("*.json")
+    if json.loads(path.read_text(encoding="utf-8"))["version"] == 1
 )
 META = GameMeta(title="Café quiz — ünïcode", description="A & B < C", max_players=150)
 
