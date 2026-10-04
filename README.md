@@ -377,6 +377,19 @@ This creates a **Demo Course** and a **Buzzer Demo** game with 9 questions (1 po
 | 8 | Fill in the blank | Accuracy (fuzzy) | Who wrote 'Romeo and Juliet'? |
 | 9 | Fill in the blank | Completeness | What country would you visit? |
 
+### Sample games with images
+
+Two games in `sample_games/` are generated, images included, by `scripts/generate_t6_games.py`: **Read the Graph: Data Literacy Essentials** (`read_the_graph_data_literacy.json`, classroom) and **Game Night Gauntlet** (`game_night_gauntlet.json`, party). Both are version 2 bundles that use every question type, Sort It and Spot It included, and both grading modes. Import them like any other game file (see [Quiz import and export](#quiz-import-and-export)).
+
+Change these games in the script, not in the JSON, then regenerate from the repo root with the venv active:
+
+```bash
+python scripts/generate_t6_games.py           # rewrite both files
+python scripts/generate_t6_games.py --check   # exit 1 if either file is out of date
+```
+
+The script draws every image with Pillow from fixed data and seeds, and checks each answer that depends on a picture (the correlations, mean vs median, the Spot It cells) against the data it drew. Identical PNG bytes need the same Pillow build, so run it from the repo's venv.
+
 ### Admin interface
 
 The Admin app (`http://localhost:8080/admin/`) provides a full management UI:
@@ -577,7 +590,8 @@ buzzer/
 │   ├── smoke_test_websocket.py   End-to-end WebSocket smoke test
 │   ├── simulate_players.py       Multi-profile async player simulator
 │   ├── seed_demo.py              Seeds a demo course and game
-│   └── check_theme.py            Contrast and leftover-colour check for the frontend theme
+│   ├── check_theme.py            Contrast and leftover-colour check for the frontend theme
+│   └── generate_t6_games.py      Generates two sample games and their images
 ├── tests/
 │   ├── integration/        Pytest integration test suite
 │   ├── unit/               Pytest unit tests (no stack needed)
