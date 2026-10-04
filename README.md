@@ -390,6 +390,16 @@ python scripts/generate_t6_games.py --check   # exit 1 if either file is out of 
 
 The script draws every image with Pillow from fixed data and seeds, and checks each answer that depends on a picture (the correlations, mean vs median, the Spot It cells) against the data it drew. Identical PNG bytes need the same Pillow build, so run it from the repo's venv.
 
+Two more, **All About Wisconsin** (`wisconsin_all_about.json`, classroom) and **Wisconsin Sports** (`wisconsin_sports.json`, party), are written by hand around real photos, and also cover every question type and both grading modes. Each JSON file is the only copy of its questions, so edit it directly. Its images are ordinary files in `sample_games/images/<file name without .json>/`, and `scripts/pack_game.py` embeds them as base64, after checking the image limits, the image references, the Spot It grids and T6's coverage:
+
+```bash
+python scripts/pack_game.py sample_games/wisconsin_all_about.json sample_games/wisconsin_sports.json
+python scripts/pack_game.py --check <files...>        # exit 1 if any file is out of date
+python scripts/pack_game.py --preview DIR <files...>  # also draw each Spot It grid, to choose the cells
+```
+
+The script works for any hand-written version 2 game. Run it after changing an image or a question, and choose Spot It cells from the `--preview` overlays.
+
 ### Admin interface
 
 The Admin app (`http://localhost:8080/admin/`) provides a full management UI:
@@ -591,7 +601,8 @@ buzzer/
 │   ├── simulate_players.py       Multi-profile async player simulator
 │   ├── seed_demo.py              Seeds a demo course and game
 │   ├── check_theme.py            Contrast and leftover-colour check for the frontend theme
-│   └── generate_t6_games.py      Generates two sample games and their images
+│   ├── generate_t6_games.py      Generates two sample games and their images
+│   └── pack_game.py              Embeds a hand-written game's images and checks it
 ├── tests/
 │   ├── integration/        Pytest integration test suite
 │   ├── unit/               Pytest unit tests (no stack needed)

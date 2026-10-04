@@ -6,8 +6,8 @@ small new script embeds. Dexter's two T6 games are separate (`docs/plans/t6-quiz
 Branch: `feature/create-two-games`.
 
 Status: designed in an Elephant session (2026-10-04); Goldfish-tested the same day and revised with
-its findings; three of the four images are final and the map is being replaced (§4.5); nothing
-else built.
+its findings; built the same day (`pack_game.py`, both bundles, the README and `CLAUDE.md` lines).
+§5.1–5.4 pass. The UI play-test (§5.5–5.6) is Brody's.
 
 ## 1. Problem
 
@@ -158,7 +158,7 @@ trivia mix for any crowd of Wisconsin sports fans."**; `max_players` 150. Every 
 | 3 | fill_in_the_blank + `prompt_image_id: "lambeau-leap"` | ACCURACY | 30 | This celebration is the Lambeau Leap. Which Packers safety did it first, in 1993? (Last name is enough.) | — | accepted "Butler", "LeRoy Butler"; 1000 each; edit distance 1 |
 | 4 | multi_select | ACCURACY | 30 | Which of these players won their league's regular-season MVP award while playing for a Wisconsin team? Select all that apply. | Aaron Rodgers · Reggie White · Giannis Antetokounmpo · Ray Allen · Robin Yount · Donald Driver · Kareem Abdul-Jabbar | [250, −250, 250, −250, 250, −250, 250] |
 | 5 | sort_into_boxes | ACCURACY | 50 | Has this athlete ever played for a Wisconsin team (a pro team based in Wisconsin, or the Wisconsin Badgers)? | boxes: "Played for a Wisconsin team" · "Never did"; cards below | `correct_boxes` below |
-| 6 | find_in_image, `image_id: "team-photo"` | ACCURACY | 30 | Find [player named in §4.7] in this photo! | grid per §4.7 | cells per §4.7, `"confirmed": true` |
+| 6 | find_in_image, `image_id: "team-photo"` | ACCURACY | 30 | Find Aaron Rodgers in this photo! | grid per §4.7 | cells per §4.7, `"confirmed": true` |
 | 7 | multiple_choice | ACCURACY | 20 | In which year did the Milwaukee Braves win the World Series? | 1953 · 1957 · 1965 · 1982 | [0, 1000, 0, 0] |
 | 8 | true_false | ACCURACY | 20 | True or false: the Green Bay Packers are older than the NFL itself. | — | true 1000, false 0 |
 | 9 | multiple_choice | COMPLETENESS | 15 | Hot take: which Wisconsin team do you root for the hardest? | Packers · Bucks · Brewers · Badgers | `{}` |
@@ -191,13 +191,13 @@ must match exactly. Limits the script enforces:
 A few hundred KB is the target size, because each image is stored twice in the repo: once as the
 file and once as base64 inside the bundle.
 
-Three images are final and in their folders (all JPEG, no EXIF, so the server stores them
-unchanged). The map is being replaced:
+All four images are final and in their folders (all JPEG, no EXIF, so the server stores them
+unchanged):
 
 | Key | Game · use | File | Size (px) | What it shows | Description (alt text) |
 |---|---|---|---|---|---|
 | `ripon-schoolhouse` | classroom Q2 prompt | `ripon_schoolhouse.jpg` | 638 × 480 | The Little White Schoolhouse at dusk, with its sign and a historical marker | "Photo of the Little White Schoolhouse in Ripon, Wisconsin, a small white one-room wooden schoolhouse." |
-| `wisconsin-map` | classroom Q7 Spot It | `wisconsin_map.<ext>` | — | **Being replaced**: the first choice marked Madison with a capital star. The replacement must show the state outline and its lakes, **Mendota and Monona included**, with **no star, dot or name for any city**. County lines are optional. | Draft; check it against the replacement and never mention Madison: "Outline map of Wisconsin showing its lakes and rivers, with no city names." |
+| `wisconsin-map` | classroom Q7 Spot It | `wisconsin_map.jpg` | 425 × 550 | Blank outline map (replacing a first choice that marked Madison with a capital star): state borders, rivers and lakes, **Mendota and Monona included**; **no county lines, no city star, dot or name**; a title, a compass rose and a footer | "Outline map of Wisconsin showing its lakes and rivers, with no city names." |
 | `lambeau-leap` | party Q3 prompt | `lambeau_leap.jpg` | 495 × 618 | A **drawing** (not a photo) of a Packers player leaping into the stands | "Illustration of a Green Bay Packers player leaping into the stands at Lambeau Field as cheering fans reach out." |
 | `team-photo` | party Q6 Spot It | `team_photo.jpg` | 738 × 369 | Four Packers (#21, #12, #85, #50) walking side by side, numbers readable | "Four Green Bay Packers players in green and gold uniforms walking side by side across the field." |
 
@@ -230,8 +230,14 @@ For each bundle path `P` (all errors for a bundle are reported, and that bundle 
 3. For each image entry:
    - It has exactly the four fields (`data` may be `""` before the first pack).
    - The key matches the pattern and is unique.
-   - The description is 1–300 characters after trimming.
+   - The description is 1–300 characters after trimming, and has no spaces at either end.
+   - The filename is a plain file name: no path, no control characters, no spaces at either
+     end, ≤255 characters.
    - `folder / filename` exists and is ≤2 MiB.
+
+   The import trims the description and strips the filename to a bare name
+   (`image_service.clean_description` / `clean_filename`), and the round-trip test compares
+   both to the authored text, so anything it would change is an error here.
    - Pillow opens it as PNG, JPEG or WebP, and it isn't animated.
    - Its size **after `ImageOps.exif_transpose`** is ≤1600 px on the long side. The server
      applies the same orientation (`image_service._normalize`), so these are the dimensions
@@ -239,14 +245,16 @@ For each bundle path `P` (all errors for a bundle are reported, and that bundle 
 
    Then set `data` to the base64 of the file's bytes, unchanged.
 4. References: collect every `config.prompt_image_id`, `config.image_id` and non-null
-   `config.option_images` entry. Each must be a known key, and each key must be referenced at
+   `config.option_images` entry (with `image_refs.map_image_refs`, which visits exactly those
+   slots). Each must be a known key, and each key must be referenced at
    least once (the import accepts unused images, but Dexter's round-trip test asserts every image
    is used).
 5. Spot It questions:
    - `grid` must fit the image: `cols ≤ max_cols` and `rows ≤ max_rows` from
      `spot_it.max_grid(width, height)` on the oriented size.
-   - `accepted_cells` must be 1 to ⌊cols·rows/2⌋ distinct cells, each inside the grid (the same
-     rule the import applies; §4.2).
+   - `accepted_cells` must be 1 to ⌊cols·rows/2⌋ distinct cells, each inside the grid. This
+     runs the import's own `spot_it.validate` (without the bundle-only `confirmed`), so unknown
+     keys and a zero points value are caught too.
    - Warn if `answer_data.confirmed` isn't `true`, because the game can't start until a host
      confirms it.
 6. Coverage: print the question types and grading modes present.
@@ -301,12 +309,18 @@ Choose these after the images are in the folders, using `--preview`. Then record
   PNGs) and agrees the target is inside the tinted cells. After import, Brody checks the question
   in the Host question editor: it must show no "Needs review".
 
-Record: Q7 grid ___ × ___, cells ___; Q6 player ___, grid ___ × ___, cells ___.
+Record:
+- **Q7:** grid 7 × 7, cell D6 (`col` 3, `row` 5). Madison's lakes are at about x 216–227,
+  y 407–422 of the 425 × 550 map, at least 14 px inside every edge of D6. 5 × 5 to 8 × 8 grids
+  were weighed; all but 7 × 7 and 5 × 5 put a line within 4 px of the lakes, and 5 × 5's cells
+  are too coarse. Milwaukee falls in column E or F. Confirmed from the preview, 2026-10-04.
+- **Q6:** Aaron Rodgers (#12), grid 4 × 2, cells B1 and B2 (`col` 1, `row` 0 and 1). He fits
+  entirely inside column B. #21, #85 and #50 are each the clear subject of their own column, and
+  the referee behind him isn't a player. Confirmed from the preview, 2026-10-04.
 
 ### 4.8 Order of work
 
-1. Brody downloads the four images into the two folders (§4.5). Three are final. Only the map's
-   replacement is outstanding: steps 2–3 don't need it, and step 4 needs it only for the map.
+1. Brody downloads the four images into the two folders (§4.5). Done.
 2. Write `scripts/pack_game.py` (§4.6); run `ruff check` / `ruff format` on it.
 3. Write both bundles exactly as §4.3 and §4.4, with `"data": ""` and a placeholder for each
    Spot It answer:
