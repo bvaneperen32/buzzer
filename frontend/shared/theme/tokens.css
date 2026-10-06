@@ -232,8 +232,7 @@
   --bg-meter-track: var(--bg-selected);
   --text-on-meter: 255 255 255; /* #ffffff white */
 
-  /* Answer-option tiles (player only), in OPTION_COLORS order. Every tile carries the same dark
-     text in both themes, so red, purple and pink use fills light enough for it. */
+  /* Answer-option tiles (player only), in OPTION_COLORS order; every tile takes the same dark text */
   --bg-option-1: 236 93 94; /* #ec5d5e dark red-10 */
   --bg-option-2: var(--blue-9);
   --bg-option-3: var(--yellow-9);
